@@ -1,56 +1,51 @@
 #!/bin/bash
+# ─────────────────────────────────────────────────────────
+# BotMART — Re-deploy script (for updates after initial setup)
+# Run from the project directory: /var/www/botmart/
+# ─────────────────────────────────────────────────────────
 set -e
 
-echo "=== TG Shop Deployment Script ==="
+INSTALL_DIR="/var/www/botmart"
+APP_NAME="botmart"
+
+echo ""
+echo "=== BotMART — Deploying Update ==="
 echo ""
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$PROJECT_DIR"
+cd "${INSTALL_DIR}"
 
-# 1. Pull latest code
 echo "[1/6] Pulling latest code..."
-git pull origin main
+git pull
 
-# 2. Install server dependencies
 echo "[2/6] Installing server dependencies..."
-cd server
+cd "${INSTALL_DIR}/server"
 npm ci --production
-cd ..
+cd "${INSTALL_DIR}"
 
-# 3. Build dashboard
 echo "[3/6] Building dashboard..."
-cd dashboard
+cd "${INSTALL_DIR}/dashboard"
 npm ci
 npx vite build
-cd ..
+cd "${INSTALL_DIR}"
 
-# 4. Copy dashboard build to server public
-echo "[4/6] Deploying dashboard to server/public..."
-rm -rf server/public
-cp -r dashboard/dist server/public
+echo "[4/6] Copying dashboard build..."
+rm -rf "${INSTALL_DIR}/server/public"
+cp -r "${INSTALL_DIR}/dashboard/dist" "${INSTALL_DIR}/server/public"
 
-# 5. Create logs directory
-mkdir -p logs
+mkdir -p "${INSTALL_DIR}/logs"
 
-# 6. Restart PM2
 echo "[5/6] Restarting PM2..."
-if pm2 describe tg-shop > /dev/null 2>&1; then
-    pm2 restart tg-shop
+if pm2 describe ${APP_NAME} > /dev/null 2>&1; then
+  pm2 restart ${APP_NAME}
 else
-    pm2 start ecosystem.config.js
+  pm2 start "${INSTALL_DIR}/ecosystem.config.js"
 fi
 
-echo "[6/6] Saving PM2 process list..."
+echo "[6/6] Saving PM2 state..."
 pm2 save
 
 echo ""
-echo "=== Deployment Complete ==="
-echo "Dashboard: https://yourdomain.com"
-echo "API: https://yourdomain.com/api"
-echo "Health: https://yourdomain.com/health"
+echo "=== Deploy Complete ==="
+echo "  pm2 logs botmart   — Check logs"
+echo "  pm2 monit          — Monitor"
 echo ""
-echo "Useful commands:"
-echo "  pm2 logs tg-shop      - View logs"
-echo "  pm2 monit             - Monitor processes"
-echo "  pm2 restart tg-shop   - Restart server"
-echo "  pm2 stop tg-shop      - Stop server"

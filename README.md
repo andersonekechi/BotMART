@@ -1,4 +1,4 @@
-# Telegram E-Commerce Bot + Admin Dashboard
+# BotMART — Telegram E-Commerce Bot + Admin Dashboard
 
 A fully functional Telegram bot for selling digital tools and products, with a modern web-based admin dashboard for managing inventory, orders, and analytics.
 
@@ -46,212 +46,203 @@ A fully functional Telegram bot for selling digital tools and products, with a m
 ## Project Structure
 
 ```
-├── server/                    # Backend + Bot
+/var/www/botmart/                  # Isolated install directory
+├── server/                        # Backend + Bot
 │   ├── src/
-│   │   ├── config/            # Database, constants
-│   │   ├── controllers/       # API controllers
-│   │   ├── middleware/         # JWT auth middleware
-│   │   ├── models/            # Mongoose models
-│   │   ├── routes/            # Express routes
-│   │   ├── services/          # Bot logic, payment service
-│   │   ├── utils/             # Helpers, seed script
-│   │   └── index.js           # Entry point
-│   ├── uploads/               # Uploaded files
-│   ├── .env.example           # Environment template
+│   │   ├── config/                # Database, constants
+│   │   ├── controllers/           # API controllers
+│   │   ├── middleware/            # JWT auth middleware
+│   │   ├── models/                # Mongoose models (Product, Order, User, Admin)
+│   │   ├── routes/                # Express routes
+│   │   ├── services/              # Bot logic, payment service
+│   │   ├── utils/                 # Helpers, seed script
+│   │   └── index.js               # Entry point
+│   ├── uploads/                   # Uploaded files
+│   ├── public/                    # Dashboard build (auto-generated)
+│   ├── .env.example               # Environment template
+│   ├── .env                       # Your secrets (not in git)
 │   └── package.json
-├── dashboard/                 # React admin frontend
+├── dashboard/                     # React admin frontend
 │   ├── src/
-│   │   ├── components/        # Layout, ProtectedRoute
-│   │   ├── context/           # Auth context
-│   │   ├── pages/             # Dashboard, Products, Orders, Analytics, Settings
-│   │   ├── services/          # API client
-│   │   └── index.css          # Global styles
+│   │   ├── components/            # Layout, ProtectedRoute
+│   │   ├── context/               # Auth context
+│   │   ├── pages/                 # Dashboard, Products, Orders, Analytics, Settings
+│   │   ├── services/              # API client
+│   │   └── index.css              # Global styles
 │   ├── vite.config.js
 │   └── package.json
-├── ecosystem.config.js        # PM2 configuration
-├── nginx.conf                 # Nginx configuration template
-├── deploy.sh                  # Deployment script
+├── logs/                          # PM2 logs (auto-created)
+├── ecosystem.config.js            # PM2 config (app name: botmart, port: 4100)
+├── nginx.conf                     # Nginx site config template
+├── setup-vps.sh                   # One-command VPS setup (safe for shared VPS)
+├── deploy.sh                      # Re-deploy updates
 └── README.md
 ```
 
 ## Prerequisites
 
 - **Node.js** v18+
-- **MongoDB** v6+ (local or Atlas)
+- **MongoDB** v6+ (local or [MongoDB Atlas](https://www.mongodb.com/atlas) free tier)
 - **Telegram Bot Token** (from [@BotFather](https://t.me/BotFather))
 - **Stripe Account** (for card payments, optional)
-- **VPS** with Nginx and PM2 (for production)
+- **VPS** with Nginx (for production)
 
-## Quick Start (Development)
+---
 
-### 1. Clone the Repository
+## VPS Deployment (Recommended)
+
+> **This project is designed for safe deployment on a shared VPS.** Everything lives in `/var/www/botmart/` with its own PM2 process (`botmart`), Nginx site config, port (`4100`), and MongoDB database (`botmart`). It will NOT touch any existing services.
+
+### Option A: Automated Setup (Recommended)
+
+SSH into your VPS and run:
 
 ```bash
-git clone <repo-url>
-cd telegram-e-commerce-platform
+# Clone the repo into /var/www/botmart
+sudo mkdir -p /var/www/botmart
+cd /var/www/botmart
+sudo git clone https://github.com/andersonekechi/BotMART.git .
+
+# Run the setup script
+sudo bash setup-vps.sh
 ```
 
-### 2. Configure Environment Variables
+The script will:
+1. Install Node.js, PM2, Nginx if missing
+2. Check that port 4100 is free
+3. Install dependencies and build the dashboard
+4. Create your `.env` file and prompt you to fill it in
+5. Set up Nginx (asks for your domain/subdomain)
+6. Start the app with PM2
+
+### Option B: Manual Step-by-Step
+
+#### 1. Clone to isolated directory
+
+```bash
+sudo mkdir -p /var/www/botmart
+cd /var/www/botmart
+sudo git clone https://github.com/andersonekechi/BotMART.git .
+```
+
+#### 2. Configure environment
 
 ```bash
 cp server/.env.example server/.env
+nano server/.env
 ```
 
-Edit `server/.env` with your values:
+Fill in these values:
 
 ```env
-PORT=5000
-NODE_ENV=development
-
-# MongoDB (local or Atlas)
-MONGODB_URI=mongodb://localhost:27017/telegram_shop
-
-# Telegram Bot
-BOT_TOKEN=your_bot_token_from_botfather
-ADMIN_TELEGRAM_IDS=your_telegram_user_id
-
-# JWT
-JWT_SECRET=generate_a_strong_random_string
-JWT_EXPIRES_IN=7d
-
-# Stripe (optional — leave empty to skip)
-STRIPE_SECRET_KEY=sk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-
-# Crypto (optional)
-CRYPTO_WALLET_ADDRESS=your_wallet
-
-# Dashboard URL (for CORS)
-DASHBOARD_URL=http://localhost:3000
+PORT=4100
+NODE_ENV=production
+MONGODB_URI=mongodb://localhost:27017/botmart
+BOT_TOKEN=<your token from @BotFather>
+WEBHOOK_URL=https://shop.yourdomain.com
+ADMIN_TELEGRAM_IDS=<your Telegram user ID>
+JWT_SECRET=<random long string>
 ```
 
-**How to get your Telegram user ID:** Send `/start` to [@userinfobot](https://t.me/userinfobot)
+**Get your Telegram user ID:** message [@userinfobot](https://t.me/userinfobot)
 
-### 3. Install Dependencies
+#### 3. Install and build
 
 ```bash
-# Server
-cd server
-npm install
-
-# Dashboard
-cd ../dashboard
-npm install
+cd /var/www/botmart/server && npm ci --production
+cd /var/www/botmart/dashboard && npm ci && npx vite build
+cp -r /var/www/botmart/dashboard/dist /var/www/botmart/server/public
 ```
 
-### 4. Seed Sample Data (Optional)
+#### 4. Seed sample products (optional)
 
 ```bash
-cd server
-npm run seed
+cd /var/www/botmart/server && npm run seed
 ```
 
-This creates 6 sample products and a default admin (`admin` / `admin123`).
+#### 5. Configure Nginx
 
-### 5. Start Development Servers
+```bash
+sudo cp /var/www/botmart/nginx.conf /etc/nginx/sites-available/botmart
+# Replace YOUR_DOMAIN with your actual domain
+sudo sed -i 's/YOUR_DOMAIN/shop.yourdomain.com/g' /etc/nginx/sites-available/botmart
+sudo ln -sf /etc/nginx/sites-available/botmart /etc/nginx/sites-enabled/botmart
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+#### 6. SSL certificate
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d shop.yourdomain.com
+```
+
+#### 7. Start with PM2
+
+```bash
+cd /var/www/botmart
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup   # auto-start on reboot
+```
+
+#### 8. Stripe webhook (if using Stripe)
+
+In Stripe Dashboard → Developers → Webhooks:
+- Endpoint: `https://shop.yourdomain.com/api/payment/stripe-webhook`
+- Events: `checkout.session.completed`
+- Copy signing secret to `STRIPE_WEBHOOK_SECRET` in `.env`
+
+### Updating (after initial setup)
+
+```bash
+cd /var/www/botmart
+sudo bash deploy.sh
+```
+
+---
+
+## Local Development
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/andersonekechi/BotMART.git
+cd BotMART
+cp server/.env.example server/.env
+# Edit server/.env — set BOT_TOKEN, ADMIN_TELEGRAM_IDS, JWT_SECRET, MONGODB_URI
+```
+
+### 2. Install dependencies
+
+```bash
+cd server && npm install
+cd ../dashboard && npm install
+```
+
+### 3. Run
 
 **Terminal 1 — Backend:**
 ```bash
-cd server
-npm run dev
+cd server && npm run dev
 ```
 
 **Terminal 2 — Dashboard:**
 ```bash
-cd dashboard
-npm run dev
+cd dashboard && npm run dev
 ```
 
-- **Dashboard:** http://localhost:3000
-- **API:** http://localhost:5000/api
-- **Bot:** Running in polling mode automatically
+- Dashboard: http://localhost:3000
+- API: http://localhost:4100/api
+- Bot: Runs in polling mode (no webhook needed locally)
 
-### 6. Login to Dashboard
+### 4. Login to dashboard
 
-Default credentials:
 - **Username:** `admin`
 - **Password:** `admin123`
+- **Change this immediately** in Settings
 
-> **Change the default password immediately** in Settings.
-
-## Production Deployment (VPS)
-
-### 1. Server Setup
-
-```bash
-# Install Node.js 18+
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# Install PM2
-sudo npm install -g pm2
-
-# Install Nginx
-sudo apt install -y nginx
-
-# Install MongoDB (or use Atlas)
-# See: https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-ubuntu/
-```
-
-### 2. Clone & Configure
-
-```bash
-cd /var/www
-git clone <repo-url> tg-shop
-cd tg-shop
-cp server/.env.example server/.env
-nano server/.env  # Fill in production values
-```
-
-Set `NODE_ENV=production` and `WEBHOOK_URL=https://yourdomain.com` in your `.env`.
-
-### 3. Deploy
-
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
-
-This will:
-1. Install dependencies
-2. Build the React dashboard
-3. Copy the build to `server/public/`
-4. Start/restart PM2
-
-### 4. Configure Nginx
-
-```bash
-sudo cp nginx.conf /etc/nginx/sites-available/tg-shop
-sudo ln -s /etc/nginx/sites-available/tg-shop /etc/nginx/sites-enabled/
-# Edit domain name in the config
-sudo nano /etc/nginx/sites-available/tg-shop
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-### 5. SSL Certificate (Let's Encrypt)
-
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d yourdomain.com
-```
-
-### 6. PM2 Startup
-
-```bash
-pm2 startup
-pm2 save
-```
-
-PM2 will auto-restart the bot on crash and on server reboot.
-
-### 7. Set Stripe Webhook (if using Stripe)
-
-In your Stripe Dashboard:
-1. Go to **Developers → Webhooks**
-2. Add endpoint: `https://yourdomain.com/api/payment/stripe-webhook`
-3. Listen for: `checkout.session.completed`
-4. Copy the webhook signing secret to `STRIPE_WEBHOOK_SECRET` in `.env`
+---
 
 ## API Endpoints
 
@@ -265,7 +256,7 @@ In your Stripe Dashboard:
 ### Products (Auth Required)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/products` | List products (with pagination, search, filter) |
+| GET | `/api/products` | List products (pagination, search, filter) |
 | GET | `/api/products/:id` | Get single product |
 | POST | `/api/products` | Create product |
 | PUT | `/api/products/:id` | Update product |
@@ -276,10 +267,10 @@ In your Stripe Dashboard:
 ### Orders (Auth Required)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/orders` | List orders (with pagination, search, filter) |
+| GET | `/api/orders` | List orders (pagination, search, filter) |
 | GET | `/api/orders/analytics` | Sales analytics |
 | GET | `/api/orders/:id` | Get single order |
-| PUT | `/api/orders/:id/status` | Update order status |
+| PUT | `/api/orders/:id/status` | Update order status + auto-deliver |
 
 ### Payment
 | Method | Endpoint | Description |
@@ -288,7 +279,7 @@ In your Stripe Dashboard:
 | GET | `/api/payment/success` | Payment success page |
 | GET | `/api/payment/cancel` | Payment cancel page |
 
-### Bot
+### Bot Webhook
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/bot/webhook` | Telegram webhook receiver |
@@ -297,45 +288,63 @@ In your Stripe Dashboard:
 
 ### User Commands
 - `/start` — Welcome message
-- `/shop` — Browse product catalog
-- `/cart` — View shopping cart
+- `/shop` — Browse product catalog by category
+- `/cart` — View and manage shopping cart
 - `/orders` — View order history
-- `/help` — Show available commands
+- `/help` — Show all commands
 
-### Admin Commands
-- `/addproduct name | desc | price | category | stock | deliveryType | content` — Add product
-- `/editproduct productId | field=value | field=value` — Edit product
-- `/removeproduct [productId]` — Remove/deactivate product
+### Admin Commands (only for IDs in ADMIN_TELEGRAM_IDS)
+- `/addproduct name | desc | price | category | stock | deliveryType | content`
+- `/editproduct productId | field=value | field=value`
+- `/removeproduct [productId]`
 - `/adminorders` — View recent orders
-- `/stats` — View sales statistics
+- `/stats` — Revenue, orders, conversion, top products
 
-## Environment Variables Reference
+## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Server port (default: 5000) |
-| `NODE_ENV` | No | `development` or `production` |
-| `MONGODB_URI` | Yes | MongoDB connection string |
-| `BOT_TOKEN` | Yes | Telegram bot token from BotFather |
-| `WEBHOOK_URL` | Prod | Your domain (e.g. `https://shop.example.com`) |
-| `ADMIN_TELEGRAM_IDS` | Yes | Comma-separated Telegram user IDs of admins |
-| `JWT_SECRET` | Yes | Secret key for JWT signing |
-| `JWT_EXPIRES_IN` | No | JWT expiry (default: `7d`) |
-| `STRIPE_SECRET_KEY` | No | Stripe secret key for payments |
-| `STRIPE_WEBHOOK_SECRET` | No | Stripe webhook signing secret |
-| `CRYPTO_WALLET_ADDRESS` | No | Crypto wallet for manual payments |
-| `DASHBOARD_URL` | No | Dashboard URL for CORS (default: `*`) |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `4100` | Server port |
+| `NODE_ENV` | No | `development` | `development` or `production` |
+| `MONGODB_URI` | Yes | — | MongoDB connection string |
+| `BOT_TOKEN` | Yes | — | Telegram bot token from BotFather |
+| `WEBHOOK_URL` | Prod | — | Your domain for webhook (e.g. `https://shop.example.com`) |
+| `ADMIN_TELEGRAM_IDS` | Yes | — | Comma-separated Telegram user IDs |
+| `JWT_SECRET` | Yes | — | Secret key for JWT signing |
+| `JWT_EXPIRES_IN` | No | `7d` | JWT expiry duration |
+| `STRIPE_SECRET_KEY` | No | — | Stripe secret key |
+| `STRIPE_WEBHOOK_SECRET` | No | — | Stripe webhook signing secret |
+| `CRYPTO_WALLET_ADDRESS` | No | — | Crypto wallet for manual payments |
+| `DASHBOARD_URL` | No | `*` | Dashboard URL for CORS |
 
-## Useful PM2 Commands
+## Useful Commands
 
 ```bash
-pm2 logs tg-shop        # View real-time logs
-pm2 monit                # Monitor CPU/memory
-pm2 restart tg-shop      # Restart
-pm2 stop tg-shop         # Stop
-pm2 delete tg-shop       # Remove from PM2
-pm2 status               # List all processes
+# PM2
+pm2 logs botmart          # Live logs
+pm2 monit                 # Monitor CPU/memory
+pm2 restart botmart       # Restart
+pm2 stop botmart          # Stop
+pm2 status                # List all processes
+
+# Nginx
+sudo nginx -t                         # Test config
+sudo systemctl reload nginx           # Reload
+sudo nano /etc/nginx/sites-available/botmart   # Edit config
 ```
+
+## Isolation Summary
+
+Everything BotMART uses is scoped to avoid conflicting with other services:
+
+| Resource | BotMART Value |
+|----------|---------------|
+| Install directory | `/var/www/botmart/` |
+| PM2 process name | `botmart` |
+| Port | `4100` |
+| MongoDB database | `botmart` |
+| Nginx site config | `/etc/nginx/sites-available/botmart` |
+| Log files | `/var/www/botmart/logs/` |
 
 ## License
 

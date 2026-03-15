@@ -13,8 +13,9 @@ function getBot() {
 
 function initBot() {
   const token = process.env.BOT_TOKEN;
-  if (!token) {
-    console.error('BOT_TOKEN not set');
+  if (!token || token === 'placeholder_get_from_botfather') {
+    console.warn('BOT_TOKEN not configured — bot disabled. Dashboard still works.');
+    console.warn('Get a token from @BotFather on Telegram and set it in server/.env');
     return null;
   }
 

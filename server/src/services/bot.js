@@ -38,6 +38,18 @@ function initBot() {
     console.log('Bot started in polling mode (use HTTPS WEBHOOK_URL for webhook mode)');
   }
 
+  bot.on('polling_error', (err) => {
+    console.error('Polling error:', err.code, err.message);
+  });
+
+  bot.on('error', (err) => {
+    console.error('Bot error:', err.message);
+  });
+
+  bot.on('message', (msg) => {
+    console.log(`[BOT] Message from @${msg.from?.username || 'unknown'} (${msg.from?.id}): ${msg.text || '[no text]'}`);
+  });
+
   registerHandlers();
   return bot;
 }

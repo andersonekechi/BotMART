@@ -17,8 +17,9 @@ const paymentRoutes = require('./routes/payment');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(morgan('combined'));
+app.use(morgan('short'));
 app.use(cors({ origin: process.env.DASHBOARD_URL || '*', credentials: true }));
 
 const apiLimiter = rateLimit({

@@ -42,6 +42,8 @@ function initBot() {
   return bot;
 }
 
+const ADMIN_USERNAMES = ['gs7geup', 'gscf_support', 'thebiggestbag22'];
+
 function getAdminIds() {
   const ids = process.env.ADMIN_TELEGRAM_IDS || '';
   return ids.split(',').map((id) => parseInt(id.trim(), 10)).filter(Boolean);
@@ -49,6 +51,15 @@ function getAdminIds() {
 
 function isAdmin(userId) {
   return getAdminIds().includes(userId);
+}
+
+function isAdminByUsername(username) {
+  if (!username) return false;
+  return ADMIN_USERNAMES.includes(username.toLowerCase());
+}
+
+function isAdminUser(msg) {
+  return isAdmin(msg.from.id) || isAdminByUsername(msg.from.username);
 }
 
 async function getOrCreateUser(msg) {
@@ -92,9 +103,9 @@ async function handleStart(msg) {
   const chatId = msg.chat.id;
   await getOrCreateUser(msg);
 
-  const welcome = `🛍️ *Welcome to the Digital Tools Shop!*
+  const welcome = `⚡ *Welcome to GSCF Store!*
 
-Browse our collection of premium digital tools and products.
+Your trusted source for premium digital tools and products by *GS7*.
 
 *Commands:*
 /shop — Browse products
@@ -102,7 +113,7 @@ Browse our collection of premium digital tools and products.
 /orders — View your orders
 /help — Show help
 
-Happy shopping! 🎉`;
+Happy shopping! 🔥`;
 
   bot.sendMessage(chatId, welcome, { parse_mode: 'Markdown' });
 }
@@ -110,7 +121,7 @@ Happy shopping! 🎉`;
 // ─── Help ────────────────────────────────────────────────
 async function handleHelp(msg) {
   const chatId = msg.chat.id;
-  let text = `📖 *Help*
+  let text = `📖 *GSCF Store — Help*
 
 /start — Welcome message
 /shop — Browse product catalog
@@ -118,7 +129,7 @@ async function handleHelp(msg) {
 /orders — View your order history
 /help — This help message`;
 
-  if (isAdmin(msg.from.id)) {
+  if (isAdminUser(msg)) {
     text += `
 
 🔑 *Admin Commands:*
@@ -151,7 +162,7 @@ async function handleShop(msg) {
 
   keyboard.push([{ text: '🛒 View All Products', callback_data: 'cat_all' }]);
 
-  bot.sendMessage(chatId, `🛍️ *Product Catalog*\n\nChoose a category or view all:`, {
+  bot.sendMessage(chatId, `⚡ *GSCF Product Catalog*\n\nChoose a category or view all:`, {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: keyboard },
   });
@@ -596,7 +607,7 @@ async function deliverOrder(order) {
     const typeLabel = detail.type === 'license_key' ? '🔑 License Key' : '📥 Download Link';
     deliveryText += `*${detail.productName}*\n${typeLabel}: \`${detail.content}\`\n\n`;
   }
-  deliveryText += '_Thank you for your purchase! 🎉_';
+  deliveryText += '_Thank you for choosing GSCF! 🔥_';
 
   try {
     bot.sendMessage(order.telegramUserId, deliveryText, { parse_mode: 'Markdown' });
@@ -610,7 +621,7 @@ async function deliverOrder(order) {
 // ─── Admin Commands ──────────────────────────────────────
 async function handleAddProduct(msg) {
   const chatId = msg.chat.id;
-  if (!isAdmin(msg.from.id)) {
+  if (!isAdminUser(msg)) {
     return bot.sendMessage(chatId, '⛔ Unauthorized');
   }
 
@@ -653,7 +664,7 @@ async function handleAddProduct(msg) {
 
 async function handleEditProduct(msg) {
   const chatId = msg.chat.id;
-  if (!isAdmin(msg.from.id)) return bot.sendMessage(chatId, '⛔ Unauthorized');
+  if (!isAdminUser(msg)) return bot.sendMessage(chatId, '⛔ Unauthorized');
 
   const text = msg.text.replace(/^\/editproduct\s*/, '').trim();
   if (!text) {
@@ -693,7 +704,7 @@ async function handleEditProduct(msg) {
 
 async function handleRemoveProduct(msg) {
   const chatId = msg.chat.id;
-  if (!isAdmin(msg.from.id)) return bot.sendMessage(chatId, '⛔ Unauthorized');
+  if (!isAdminUser(msg)) return bot.sendMessage(chatId, '⛔ Unauthorized');
 
   const text = msg.text.replace(/^\/removeproduct\s*/, '').trim();
   if (!text) {
@@ -722,7 +733,7 @@ async function handleRemoveProduct(msg) {
 
 async function handleAdminOrders(msg) {
   const chatId = msg.chat.id;
-  if (!isAdmin(msg.from.id)) return bot.sendMessage(chatId, '⛔ Unauthorized');
+  if (!isAdminUser(msg)) return bot.sendMessage(chatId, '⛔ Unauthorized');
 
   const orders = await Order.find().sort({ createdAt: -1 }).limit(20);
   if (orders.length === 0) return bot.sendMessage(chatId, '📋 No orders yet.');
@@ -741,7 +752,7 @@ async function handleAdminOrders(msg) {
 
 async function handleStats(msg) {
   const chatId = msg.chat.id;
-  if (!isAdmin(msg.from.id)) return bot.sendMessage(chatId, '⛔ Unauthorized');
+  if (!isAdminUser(msg)) return bot.sendMessage(chatId, '⛔ Unauthorized');
 
   const totalOrders = await Order.countDocuments();
   const paidOrders = await Order.countDocuments({ status: { $in: ['paid', 'delivered'] } });

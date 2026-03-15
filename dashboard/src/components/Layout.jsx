@@ -24,7 +24,7 @@ export default function Layout() {
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <Bot size={28} />
-          <span className="sidebar-title">TG Shop</span>
+          <span className="sidebar-title">GSCF Store</span>
           <button className="sidebar-close" onClick={() => setSidebarOpen(false)}>
             <X size={20} />
           </button>

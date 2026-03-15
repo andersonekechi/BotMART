@@ -31,8 +31,8 @@ export default function Login() {
       <div className="login-card">
         <div className="login-header">
           <Bot size={48} className="login-icon" />
-          <h1>TG Shop Admin</h1>
-          <p>Sign in to manage your store</p>
+          <h1>GSCF Admin</h1>
+          <p>GS7 Store Management Dashboard</p>
         </div>
         <form onSubmit={handleSubmit}>
           {error && <div className="alert alert-error">{error}</div>}

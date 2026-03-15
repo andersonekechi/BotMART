@@ -19,7 +19,8 @@ function initBot() {
     return null;
   }
 
-  const isWebhook = process.env.NODE_ENV === 'production' && process.env.WEBHOOK_URL;
+  const webhookUrl = process.env.WEBHOOK_URL || '';
+  const isWebhook = process.env.NODE_ENV === 'production' && webhookUrl.startsWith('https://');
 
   bot = new TelegramBot(token, {
     polling: !isWebhook,
@@ -27,14 +28,14 @@ function initBot() {
   });
 
   if (isWebhook) {
-    const webhookUrl = `${process.env.WEBHOOK_URL}/api/bot/webhook`;
-    bot.setWebHook(webhookUrl).then(() => {
-      console.log(`Webhook set: ${webhookUrl}`);
+    const fullUrl = `${webhookUrl}/api/bot/webhook`;
+    bot.setWebHook(fullUrl).then(() => {
+      console.log(`Webhook set: ${fullUrl}`);
     }).catch(err => {
       console.error('Failed to set webhook:', err.message);
     });
   } else {
-    console.log('Bot started in polling mode');
+    console.log('Bot started in polling mode (use HTTPS WEBHOOK_URL for webhook mode)');
   }
 
   registerHandlers();

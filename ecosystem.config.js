@@ -2,8 +2,9 @@ module.exports = {
   apps: [
     {
       name: 'botmart',
-      script: './server/src/index.js',
-      cwd: '/var/www/botmart',
+      script: 'src/index.js',
+      cwd: '/var/www/botmart/server',
+      exec_mode: 'fork',
       instances: 1,
       autorestart: true,
       watch: false,
@@ -12,7 +13,6 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 4100,
       },
-      env_file: '/var/www/botmart/server/.env',
       error_file: '/var/www/botmart/logs/error.log',
       out_file: '/var/www/botmart/logs/out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',

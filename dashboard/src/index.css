@@ -633,6 +633,26 @@ body {
   font-size: .9rem;
 }
 
+/* Spectrum Email Verification */
+.spectrum-logo {
+  width: 120px;
+  height: auto;
+  margin-bottom: 16px;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.spectrum-verification-page .verification-actions {
+  margin-top: 24px;
+  text-align: center;
+}
+
+.spectrum-verification-page .verification-hint {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
 /* ── Modals ────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed;

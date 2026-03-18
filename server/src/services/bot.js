@@ -222,7 +222,7 @@ async function handleMainMenu(chatId, from) {
   const wallet = await getOrCreateWallet(from.id);
   clearState(from.id);
 
-  const text = `⚡ *GSCF Store*\n\nWelcome, *${from.first_name || 'friend'}*!\n💰 Wallet Balance: *$${wallet.balance.toFixed(2)}*\n\nYour trusted marketplace for premium digital tools.`;
+  const text = `⚡ *Welcome to GSCF Store!*\n\nHey *${from.first_name || 'there'}* 👋\nGlad to have you here!\n\n💰 Your Wallet: *$${wallet.balance.toFixed(2)}*\n\nGSCF is your one-stop marketplace for premium digital products — from bank logs to tools and more.\n\n🛍 *Tap "Shop"* to browse products\n💰 *Tap "Wallet"* to top up & manage funds\n🤖 *Tap "Ask GSCF AI"* if you need help finding anything\n\n_Use the buttons below to navigate. You can always come back here by tapping ← Back._`;
 
   bot.sendMessage(chatId, text, {
     parse_mode: 'Markdown',
@@ -235,7 +235,7 @@ async function handleShop(chatId, from) {
   await getOrCreateUser(from);
   const activeCount = await Product.countDocuments({ status: 'active', stock: { $ne: 0 } });
 
-  bot.sendMessage(chatId, `🛍 *GSCF Store*\n\n📦 *${activeCount}* products available\n\nChoose a category:`, {
+  bot.sendMessage(chatId, `🛍 *GSCF Store — Shop*\n\n📦 *${activeCount}* products currently available\n\nBrowse by category below, or tap *"All Products"* to see everything. Use *"Search"* if you know what you're looking for.\n\n_Tap any category to explore:_`, {
     parse_mode: 'Markdown',
     reply_markup: shopCategoryKeyboard(),
   });
@@ -250,7 +250,7 @@ async function showProducts(chatId, category, page = 0) {
   const products = await Product.find(query).sort({ createdAt: -1 }).skip(page * perPage).limit(perPage);
 
   if (products.length === 0) {
-    return bot.sendMessage(chatId, '📭 No products found in this category.', {
+    return bot.sendMessage(chatId, '📭 *No products here yet*\n\nThis category is empty right now, but new products are added regularly. Check back soon or browse other categories!', {
       reply_markup: { inline_keyboard: [[{ text: '← Back to Shop', callback_data: 'menu_shop' }]] },
     });
   }
@@ -285,7 +285,7 @@ async function handleCart(chatId, from) {
   const user = await getOrCreateUser(from);
   const wallet = await getOrCreateWallet(from.id);
   if (!user.cart || user.cart.length === 0) {
-    return bot.sendMessage(chatId, '🛒 *Your cart is empty*\n\nBrowse the shop to add items!', {
+    return bot.sendMessage(chatId, '🛒 *Your Cart*\n\nYour cart is empty right now.\n\nHead over to the *Shop* to browse our products — when you find something you like, tap *"Add to Cart"* and it\'ll show up here.\n\n_Ready to shop?_', {
       parse_mode: 'Markdown',
       reply_markup: cartKeyboard(false, wallet.balance),
     });
@@ -293,7 +293,7 @@ async function handleCart(chatId, from) {
 
   await user.populate('cart.product');
   let total = 0;
-  let text = '🛒 *Your Cart*\n\n';
+  let text = '🛒 *Your Cart*\n\n_Here\'s what you\'ve added. Tap ✕ to remove an item, or choose a payment method below._\n\n';
   const removeButtons = [];
 
   for (const item of user.cart) {
@@ -323,14 +323,14 @@ async function handleOrders(chatId, from) {
   const orders = await Order.find({ telegramUserId: user.telegramId }).sort({ createdAt: -1 }).limit(10);
 
   if (orders.length === 0) {
-    return bot.sendMessage(chatId, '📦 *No orders yet*\n\nStart shopping to see your orders here!', {
+    return bot.sendMessage(chatId, '📦 *Your Orders*\n\nYou haven\'t made any purchases yet.\n\nOnce you buy something, your order history and delivery details will appear here. Head to the *Shop* to find what you need!\n\n_Tap below to start browsing:_', {
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '🛍 Go Shopping', callback_data: 'menu_shop' }], ...backButton()] },
     });
   }
 
   const emoji = { pending: '⏳', paid: '✅', delivered: '📬', cancelled: '❌', refunded: '💸' };
-  let text = '📦 *Your Orders*\n\n';
+  let text = '📦 *Your Orders*\n\n_Your recent purchases are listed below. Tap any delivered order to view download links or license keys._\n\n';
   const buttons = [];
 
   for (const o of orders) {
@@ -363,7 +363,7 @@ async function handleSellMenu(chatId, from) {
 
   if (existing) {
     if (existing.status === 'pending') {
-      return bot.sendMessage(chatId, '⏳ *Application Pending*\n\nYour seller application is being reviewed.\nYou\'ll be notified once approved.', {
+      return bot.sendMessage(chatId, '⏳ *Application Under Review*\n\nThanks for applying! Our team is reviewing your seller application. This usually takes a few hours.\n\nYou\'ll receive a notification right here as soon as your application is approved. Hang tight!', {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: backButton() },
       });
@@ -372,13 +372,13 @@ async function handleSellMenu(chatId, from) {
       return showSellerDashboard(chatId, existing);
     }
     if (existing.status === 'suspended') {
-      return bot.sendMessage(chatId, '🚫 Your seller account has been suspended. Contact admin for details.', {
+      return bot.sendMessage(chatId, '🚫 *Account Suspended*\n\nYour seller account has been temporarily suspended. This could be due to a policy violation or a review in progress.\n\nIf you believe this is a mistake, please reach out to our admin team through the *Messages* section.', {
         reply_markup: { inline_keyboard: backButton() },
       });
     }
   }
 
-  bot.sendMessage(chatId, `🏪 *Become a GSCF Seller*\n\nJoin our marketplace and sell your digital products to thousands of buyers.\n\n✅ Easy product listing\n✅ Secure payments\n✅ Built-in buyer messaging\n✅ Sales analytics\n\nReady to start?`, {
+  bot.sendMessage(chatId, `🏪 *Become a GSCF Seller*\n\nWant to sell your digital products to our growing community? Here's what you get:\n\n✅ List products with photos & descriptions\n✅ Automatic wallet payouts on every sale\n✅ Built-in messaging with buyers\n✅ Sales analytics & revenue tracking\n💰 You keep *90%* of every sale\n\nThe application is quick — just 2 steps. An admin will review and approve you.\n\n_Tap "Apply Now" to get started:_`, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
@@ -393,7 +393,7 @@ async function showSellerDashboard(chatId, seller) {
   const productCount = await Product.countDocuments({ sellerTelegramId: seller.telegramId, status: { $ne: 'inactive' } });
   const unreadMsgs = await Message.countDocuments({ receiverTelegramId: seller.telegramId, read: false });
 
-  const text = `🏪 *Seller Dashboard*\n\n📊 Store: *${seller.storeName}*\n📦 Products: *${productCount}*\n💰 Revenue: *${formatPrice(seller.totalRevenue)}*\n🛒 Sales: *${seller.totalSales}*\n💬 Unread Messages: *${unreadMsgs}*`;
+  const text = `🏪 *Seller Dashboard*\n\nWelcome back to your store, *${seller.storeName}*!\n\n📦 Products Listed: *${productCount}*\n💰 Total Revenue: *${formatPrice(seller.totalRevenue)}*\n🛒 Total Sales: *${seller.totalSales}*\n💬 Unread Messages: *${unreadMsgs}*\n\n_Use the buttons below to manage your store. Tap "Add Product" to list something new, or check your messages from buyers._`;
 
   bot.sendMessage(chatId, text, {
     parse_mode: 'Markdown',
@@ -418,13 +418,13 @@ async function handleMessages(chatId, from) {
   ]);
 
   if (conversations.length === 0) {
-    return bot.sendMessage(chatId, '💬 *No messages yet*\n\nYour conversations with buyers and sellers will appear here.', {
+    return bot.sendMessage(chatId, '💬 *Your Messages*\n\nNo conversations yet!\n\nWhen you message a seller about a product, or a buyer messages you, your conversations will appear here. All messages are securely routed through GSCF.\n\n_Tip: Tap "Ask Seller" on any product to start a conversation._', {
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: backButton() },
     });
   }
 
-  let text = '💬 *Your Messages*\n\n';
+  let text = '💬 *Your Messages*\n\n_Tap any conversation to view and reply. Red dots mean unread messages._\n\n';
   const buttons = [];
 
   for (const c of conversations) {
@@ -443,15 +443,15 @@ async function handleMessages(chatId, from) {
 
 // ─── Help ───────────────────────────────────────────────
 function handleHelp(chatId, from) {
-  let text = `❓ *GSCF Store — Help*\n\n🛍 *Shopping* — Browse products, add to cart, checkout\n📦 *Orders* — Track your purchases\n💬 *Messages* — Chat with sellers\n🤖 *AI Assistant* — Ask questions, find products, make requests\n🏪 *Sell* — Apply to become a seller\n\n_All navigation is through buttons — just tap!_`;
+  let text = `❓ *GSCF Store — Help Center*\n\nHere's everything you can do:\n\n🛍 *Shop* — Browse our 4 categories (Bank Log, Digital Goods, Bank Opening, Tools). Tap a product to see details, add to cart, or message the seller.\n\n💰 *Wallet* — Your personal balance. Top up with crypto, then use your wallet to pay for products instantly.\n\n🛒 *Cart* — Review your items and checkout. Payment is deducted from your wallet balance.\n\n📦 *Orders* — Track purchases and access your download links or license keys.\n\n💬 *Messages* — Secure conversations with sellers. All chats are routed through GSCF for your safety.\n\n🤖 *AI Assistant* — Ask our AI to help you find products, answer questions, or submit a product request.\n\n🏪 *Become a Seller* — Apply to sell your own digital products on our marketplace.\n\n━━━━━━━━━━━━━━━━\n_Navigation tip: Use the buttons under each message. Tap "← Back" to go to the previous screen, or use the main menu to jump anywhere._`;
 
   if (isAdminUser(from)) {
-    text += `\n\n⚙️ *Admin*\nAdmin Panel + Broadcast from the main menu.`;
+    text += `\n\n⚙️ *Admin Tools*\nAccess the Admin Panel and Broadcast Center from the main menu to manage sellers, view stats, and send promotions.`;
   }
 
   bot.sendMessage(chatId, text, {
     parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: backButton() },
+    reply_markup: { inline_keyboard: [[{ text: '🛍 Go to Shop', callback_data: 'menu_shop' }, { text: '💰 My Wallet', callback_data: 'menu_wallet' }], ...backButton()] },
   });
 }
 
@@ -459,7 +459,7 @@ function handleHelp(chatId, from) {
 async function handleWallet(chatId, from) {
   const wallet = await getOrCreateWallet(from.id);
 
-  const text = `💰 *Your GSCF Wallet*\n\n💵 Balance: *$${wallet.balance.toFixed(2)}*\n\n📊 *Stats:*\n├ Total Deposited: $${wallet.totalDeposited.toFixed(2)}\n├ Total Spent: $${wallet.totalSpent.toFixed(2)}\n└ Total Earned: $${wallet.totalEarned.toFixed(2)}\n\n🔗 Your Deposit ID:\n\`${wallet.depositAddress}\`\n\n_Top up your wallet to make purchases instantly._`;
+  const text = `💰 *Your GSCF Wallet*\n\nThis is your personal wallet. Top up with crypto and use your balance to buy products instantly.\n\n💵 *Current Balance: $${wallet.balance.toFixed(2)}*\n\n📊 *Account Summary:*\n├ 💚 Total Deposited: $${wallet.totalDeposited.toFixed(2)}\n├ 🔴 Total Spent: $${wallet.totalSpent.toFixed(2)}\n└ 💰 Total Earned: $${wallet.totalEarned.toFixed(2)}\n\n🔗 Your Unique Deposit ID:\n\`${wallet.depositAddress}\`\n\n_Tap "Top Up Wallet" to add funds, or view your transaction history below._`;
 
   bot.sendMessage(chatId, text, {
     parse_mode: 'Markdown',
@@ -477,7 +477,7 @@ async function handleTopUp(chatId, from) {
   const wallet = await getOrCreateWallet(from.id);
   const storeWallet = process.env.CRYPTO_WALLET_ADDRESS || 'NOT_CONFIGURED';
 
-  const text = `💳 *Top Up Your Wallet*\n\nSend crypto to the address below. Your balance will be credited once confirmed by admin.\n\n*BTC Wallet:*\n\`${storeWallet}\`\n\n*Your Deposit Reference:*\n\`${wallet.depositAddress}\`\n\n⚠️ *IMPORTANT:* Include your deposit reference (\`${wallet.depositAddress}\`) in the transaction memo/note so we can identify your payment.\n\n_After sending, tap "I've Sent Payment" and an admin will verify and credit your wallet._`;
+  const text = `💳 *Top Up Your Wallet*\n\nFollow these 3 simple steps:\n\n*Step 1:* Send your crypto to this address:\n\`${storeWallet}\`\n\n*Step 2:* Include this reference in the memo/note:\n\`${wallet.depositAddress}\`\n\n*Step 3:* After sending, tap the button below to notify us.\n\n⚠️ *Important:* Always include your deposit reference so we can match your payment to your account. Without it, crediting may be delayed.\n\n_Once confirmed, your balance will be updated and you'll receive a notification._`;
 
   bot.sendMessage(chatId, text, {
     parse_mode: 'Markdown',
@@ -495,14 +495,14 @@ async function handleWalletHistory(chatId, from) {
   const recent = (wallet.transactions || []).slice(-10).reverse();
 
   if (!recent.length) {
-    return bot.sendMessage(chatId, '📜 *No transactions yet*\n\nTop up your wallet to get started!', {
+    return bot.sendMessage(chatId, '📜 *Transaction History*\n\nNo transactions yet. Once you top up your wallet or make a purchase, your full transaction history will appear here.\n\n_Tap below to add funds:_', {
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '💳 Top Up', callback_data: 'wallet_topup' }], ...backButton('menu_wallet')] },
     });
   }
 
   const icons = { deposit: '💚', purchase: '🔴', sale_credit: '💰', commission: '🏪', refund: '↩️', withdrawal: '📤' };
-  let text = '📜 *Recent Transactions*\n\n';
+  let text = '📜 *Transaction History*\n\n_Your last 10 transactions. 💚 = deposits, 🔴 = purchases, 💰 = earnings._\n\n';
   for (const tx of recent) {
     const icon = icons[tx.type] || '•';
     const sign = tx.amount >= 0 ? '+' : '';
@@ -514,7 +514,7 @@ async function handleWalletHistory(chatId, from) {
 
 // ─── AI Assistant ───────────────────────────────────────
 async function handleAI(chatId, from) {
-  bot.sendMessage(chatId, `🤖 *GSCF AI Assistant*\n\nI can help you with:\n\n🔍 Find products by describing what you need\n💡 Answer questions about our store\n📝 Submit product requests to our team\n📂 Navigate categories and deals\n\nWhat would you like to do?`, {
+  bot.sendMessage(chatId, `🤖 *GSCF AI Assistant*\n\nHey! I'm your personal shopping assistant. I know everything about our store and can help you:\n\n🔍 *Find products* — Describe what you need and I'll search our catalog\n💬 *Answer questions* — Pricing, payments, delivery, anything about GSCF\n📝 *Request products* — Want something we don't have? Tell me and I'll pass it to the team\n\nJust pick an option below, or tap *"Ask a Question"* and type anything!\n\n_I'm powered by AI and always learning._`, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [

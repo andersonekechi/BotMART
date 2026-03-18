@@ -7,7 +7,7 @@ const Message = require('../models/Message');
 const Wallet = require('../models/Wallet');
 const { generateOrderNumber, formatPrice } = require('../utils/helpers');
 const { createStripeCheckoutSession, generateCryptoPaymentInfo } = require('./paymentService');
-const { chatWithAI } = require('./aiService');
+const { chatWithAI, adminAICompose } = require('./aiService');
 
 let bot = null;
 const userStates = new Map();
@@ -598,8 +598,9 @@ async function handleBroadcastStart(chatId, from) {
     scheduledText = '\n\n📅 *Upcoming Broadcasts:*\n';
     for (const b of scheduled) {
       const time = new Date(b.scheduledAt).toLocaleString();
-      const repeat = b.repeat !== 'none' ? ` (${b.repeat})` : '';
-      scheduledText += `• ${b.text?.slice(0, 30) || '[photo]'}...${repeat}\n  _${time}_ — \`${b._id}\`\n`;
+      const repeat = b.repeat !== 'none' ? ` 🔁 ${b.repeat}` : '';
+      const ends = b.endsAt ? ` → ends ${new Date(b.endsAt).toLocaleDateString()}` : b.repeat !== 'none' ? ' → forever' : '';
+      scheduledText += `• ${b.text?.slice(0, 30) || '[photo]'}...${repeat}${ends}\n  _${time}_\n`;
     }
   }
 
@@ -608,8 +609,9 @@ async function handleBroadcastStart(chatId, from) {
     reply_markup: {
       inline_keyboard: [
         [{ text: '📨 Send Now', callback_data: 'bc_send_now' }],
-        [{ text: '⏰ Schedule Broadcast', callback_data: 'bc_schedule' }],
-        [{ text: '🔁 Set Recurring', callback_data: 'bc_recurring' }],
+        [{ text: '🤖 AI Compose & Send', callback_data: 'bc_ai_compose' }],
+        [{ text: '⏰ Schedule', callback_data: 'bc_schedule' }, { text: '🤖 AI Schedule', callback_data: 'bc_ai_schedule' }],
+        [{ text: '🔁 Recurring (1 Month)', callback_data: 'bc_recur_month' }, { text: '♾ Recurring (Forever)', callback_data: 'bc_recur_forever' }],
         ...(scheduled.length ? [[{ text: '🗑 Cancel Scheduled', callback_data: 'bc_cancel_list' }]] : []),
         ...backButton('menu_admin'),
       ],
@@ -674,10 +676,12 @@ async function executeBroadcastById(broadcastId) {
   bc.failedCount = failed;
   await bc.save();
 
-  if (bc.repeat === 'daily') {
-    await Broadcast.create({ text: bc.text, photo: bc.photo, scheduledAt: new Date(bc.scheduledAt.getTime() + 86400000), repeat: 'daily', createdBy: bc.createdBy });
-  } else if (bc.repeat === 'weekly') {
-    await Broadcast.create({ text: bc.text, photo: bc.photo, scheduledAt: new Date(bc.scheduledAt.getTime() + 604800000), repeat: 'weekly', createdBy: bc.createdBy });
+  const intervals = { daily: 86400000, every_3_days: 259200000, weekly: 604800000 };
+  if (bc.repeat !== 'none' && intervals[bc.repeat]) {
+    const nextDate = new Date(bc.scheduledAt.getTime() + intervals[bc.repeat]);
+    if (!bc.endsAt || nextDate <= bc.endsAt) {
+      await Broadcast.create({ text: bc.text, photo: bc.photo, scheduledAt: nextDate, endsAt: bc.endsAt, repeat: bc.repeat, createdBy: bc.createdBy });
+    }
   }
 
   const adminIds = getAdminIds();
@@ -687,13 +691,13 @@ async function executeBroadcastById(broadcastId) {
 }
 
 async function handleScheduleTime(chatId, from) {
-  bot.sendMessage(chatId, '⏰ *When should this broadcast go out?*\n\nChoose a time:', {
+  bot.sendMessage(chatId, '⏰ *When should this first go out?*', {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
-        [{ text: '🕐 In 1 hour', callback_data: 'bc_time_1h' }, { text: '🕐 In 3 hours', callback_data: 'bc_time_3h' }],
-        [{ text: '🕐 In 6 hours', callback_data: 'bc_time_6h' }, { text: '🕐 In 12 hours', callback_data: 'bc_time_12h' }],
-        [{ text: '🕐 In 24 hours', callback_data: 'bc_time_24h' }, { text: '🕐 In 48 hours', callback_data: 'bc_time_48h' }],
+        [{ text: '1h', callback_data: 'bc_time_1h' }, { text: '3h', callback_data: 'bc_time_3h' }, { text: '6h', callback_data: 'bc_time_6h' }],
+        [{ text: '12h', callback_data: 'bc_time_12h' }, { text: '24h', callback_data: 'bc_time_24h' }, { text: '48h', callback_data: 'bc_time_48h' }],
+        [{ text: '3 days', callback_data: 'bc_time_72h' }, { text: '1 week', callback_data: 'bc_time_168h' }],
         ...backButton('admin_broadcast'),
       ],
     },
@@ -734,16 +738,47 @@ async function handleCallback(query) {
     if (data.startsWith('admin_addbal_')) { setState(from.id, { action: 'admin_addbal', targetTgId: parseInt(data.slice(13)) }); bot.sendMessage(chatId, '💰 Enter amount to add to this user\'s wallet:'); return ack(query); }
     if (data === 'admin_broadcast') { await handleBroadcastStart(chatId, from); return ack(query); }
     if (data === 'bc_send_now') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'broadcast_msg' }); bot.sendMessage(chatId, '📨 *Send Now*\n\nType the broadcast message (or send a photo with caption):', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data === 'bc_ai_compose') {
+      if (!isAdminUser(from)) return ack(query);
+      setState(from.id, { action: 'ai_compose_broadcast' });
+      bot.sendMessage(chatId, '🤖 *AI Broadcast Composer*\n\nDescribe what kind of broadcast you want. Examples:\n\n• _"promote our new bank logs"_\n• _"announce a 20% sale on all tools"_\n• _"welcome message for new users"_\n• _"remind users about our digital goods"_\n\nType your instruction:', { parse_mode: 'Markdown' });
+      return ack(query);
+    }
+    if (data === 'bc_ai_schedule') {
+      if (!isAdminUser(from)) return ack(query);
+      setState(from.id, { action: 'ai_schedule_broadcast' });
+      bot.sendMessage(chatId, '🤖 *AI Scheduled Broadcast*\n\nDescribe the broadcast and I\'ll compose it, then you pick the schedule.\n\nExample: _"daily promo about our tools category"_\n\nType your instruction:', { parse_mode: 'Markdown' });
+      return ack(query);
+    }
     if (data === 'bc_schedule') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'sched_broadcast_msg' }); bot.sendMessage(chatId, '⏰ *Schedule Broadcast*\n\nType the message (or send a photo with caption):', { parse_mode: 'Markdown' }); return ack(query); }
-    if (data === 'bc_recurring') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'recur_broadcast_msg' }); bot.sendMessage(chatId, '🔁 *Recurring Broadcast*\n\nType the message to repeat automatically:', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data === 'bc_recur_month') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'recur_broadcast_msg', endsAt: new Date(Date.now() + 30 * 86400000) }); bot.sendMessage(chatId, '🔁 *Recurring (1 Month)*\n\nType the message. This will repeat for 30 days then stop:', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data === 'bc_recur_forever') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'recur_broadcast_msg', endsAt: null }); bot.sendMessage(chatId, '♾ *Recurring (Forever)*\n\nType the message. This will repeat indefinitely until cancelled:', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data === 'bc_pick_time') {
+      await handleScheduleTime(chatId, from);
+      return ack(query);
+    }
+    if (data === 'bc_confirm_send') {
+      const st = getState(from.id);
+      if (!st || !isAdminUser(from)) return ack(query);
+      await executeBroadcast(chatId, from, st.broadcastText || '', st.broadcastPhoto || null);
+      return ack(query);
+    }
+    if (data === 'bc_edit_ai') {
+      const st = getState(from.id);
+      if (!st) return ack(query);
+      setState(from.id, { ...st, action: st.wasSchedule ? 'ai_schedule_broadcast' : 'ai_compose_broadcast' });
+      bot.sendMessage(chatId, '🤖 Give me a new instruction or adjustment:', { parse_mode: 'Markdown' });
+      return ack(query);
+    }
     if (data.startsWith('bc_time_')) {
       const st = getState(from.id);
       if (!st || !isAdminUser(from)) return ack(query);
-      const hours = { '1h': 1, '3h': 3, '6h': 6, '12h': 12, '24h': 24, '48h': 48 };
+      const hours = { '1h': 1, '3h': 3, '6h': 6, '12h': 12, '24h': 24, '48h': 48, '72h': 72, '168h': 168 };
       const h = hours[data.slice(8)] || 1;
       const scheduledAt = new Date(Date.now() + h * 3600000);
       const repeat = st.repeat || 'none';
-      await Broadcast.create({ text: st.broadcastText || '', photo: st.broadcastPhoto || null, scheduledAt, repeat, createdBy: from.id });
+      const endsAt = st.endsAt || null;
+      await Broadcast.create({ text: st.broadcastText || '', photo: st.broadcastPhoto || null, scheduledAt, endsAt, repeat, createdBy: from.id });
       clearState(from.id);
       bot.sendMessage(chatId, `✅ *Broadcast Scheduled!*\n\n⏰ Will send in *${h} hours*\n🔁 Repeat: *${repeat}*\n📨 To all users`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: backButton('admin_broadcast') } });
       return ack(query);
@@ -760,10 +795,11 @@ async function handleCallback(query) {
       bot.sendMessage(chatId, '✅ Broadcast cancelled.', { reply_markup: { inline_keyboard: backButton('admin_broadcast') } });
       return ack(query);
     }
-    if (data === 'recur_daily' || data === 'recur_weekly') {
+    if (data === 'recur_daily' || data === 'recur_weekly' || data === 'recur_3days') {
       const st = getState(from.id);
       if (!st) return ack(query);
-      setState(from.id, { ...st, repeat: data === 'recur_daily' ? 'daily' : 'weekly' });
+      const repeatMap = { recur_daily: 'daily', recur_weekly: 'weekly', recur_3days: 'every_3_days' };
+      setState(from.id, { ...st, repeat: repeatMap[data] });
       await handleScheduleTime(chatId, from);
       return ack(query);
     }
@@ -1008,6 +1044,8 @@ async function handleCallback(query) {
     }
 
     // ─── Admin Panel ────────────────────────────────────
+    if (data === 'admin_ai') { await handleAdminAI(chatId, from); return ack(query); }
+    if (data === 'adminai_compose') { setState(from.id, { action: 'adminai_task' }); bot.sendMessage(chatId, '🤖 *AI Admin Assistant*\n\nTell me what you need help with. Examples:\n\n• _"write product description for a VPN tool at $25"_\n• _"draft a welcome message for new sellers"_\n• _"compose a response to a buyer complaint"_\n• _"summarize today\'s sales"_\n\nType your request:', { parse_mode: 'Markdown' }); return ack(query); }
     if (data === 'admin_sellers') { await handleAdminSellers(chatId, from); return ack(query); }
     if (data.startsWith('aapprove_')) { await approveSeller(chatId, data.slice(9)); return ack(query); }
     if (data.startsWith('asuspend_')) { await suspendSeller(chatId, data.slice(9)); return ack(query); }
@@ -1070,6 +1108,76 @@ async function handleStatefulMessage(msg, state) {
     return;
   }
 
+  // AI compose broadcast — admin describes, AI writes, admin confirms
+  if (state.action === 'ai_compose_broadcast') {
+    bot.sendChatAction(chatId, 'typing');
+    const products = await Product.find({ status: 'active' });
+    const context = { productCount: products.length, userCount: await User.countDocuments(), topProducts: products.slice(0, 5).map(p => p.name).join(', ') };
+    const aiText = await adminAICompose(text, context);
+    if (!aiText) {
+      bot.sendMessage(chatId, '⚠️ AI unavailable. Write the broadcast yourself:', { reply_markup: { inline_keyboard: backButton('admin_broadcast') } });
+      setState(from.id, { action: 'broadcast_msg' });
+      return;
+    }
+    setState(from.id, { ...state, action: 'confirm_ai_broadcast', broadcastText: aiText, wasSchedule: false });
+    bot.sendMessage(chatId, `🤖 *AI Draft:*\n\n${aiText}\n\n━━━━━━━━━━━━━━━━\n_Review the message above. Send it or ask me to revise._`, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '✅ Send Now', callback_data: 'bc_confirm_send' }],
+          [{ text: '✏️ Revise', callback_data: 'bc_edit_ai' }],
+          [{ text: '❌ Cancel', callback_data: 'admin_broadcast' }],
+        ],
+      },
+    });
+    return;
+  }
+
+  // AI scheduled broadcast
+  if (state.action === 'ai_schedule_broadcast') {
+    bot.sendChatAction(chatId, 'typing');
+    const products = await Product.find({ status: 'active' });
+    const context = { productCount: products.length, userCount: await User.countDocuments(), topProducts: products.slice(0, 5).map(p => p.name).join(', ') };
+    const aiText = await adminAICompose(text, context);
+    if (!aiText) {
+      bot.sendMessage(chatId, '⚠️ AI unavailable. Write it yourself:', { reply_markup: { inline_keyboard: backButton('admin_broadcast') } });
+      setState(from.id, { action: 'sched_broadcast_msg' });
+      return;
+    }
+    setState(from.id, { ...state, broadcastText: aiText, wasSchedule: true });
+    bot.sendMessage(chatId, `🤖 *AI Draft:*\n\n${aiText}\n\n━━━━━━━━━━━━━━━━\n_Pick schedule or ask me to revise._`, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '⏰ Schedule This', callback_data: 'bc_pick_time' }],
+          [{ text: '✏️ Revise', callback_data: 'bc_edit_ai' }],
+          [{ text: '❌ Cancel', callback_data: 'admin_broadcast' }],
+        ],
+      },
+    });
+    return;
+  }
+
+  // Admin AI general task
+  if (state.action === 'adminai_task') {
+    clearState(from.id);
+    bot.sendChatAction(chatId, 'typing');
+    const products = await Product.find({ status: 'active' });
+    const context = { productCount: products.length, userCount: await User.countDocuments(), topProducts: products.slice(0, 5).map(p => p.name).join(', ') };
+    const aiText = await adminAICompose(text, context);
+    const response = aiText || '_AI unavailable right now. Try again later._';
+    bot.sendMessage(chatId, `🤖 ${response}`, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '✍️ Ask Again', callback_data: 'adminai_compose' }],
+          ...backButton('admin_ai'),
+        ],
+      },
+    });
+    return;
+  }
+
   if (state.action === 'sched_broadcast_msg') {
     setState(from.id, { ...state, broadcastText: text });
     await handleScheduleTime(chatId, from);
@@ -1082,7 +1190,8 @@ async function handleStatefulMessage(msg, state) {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '📅 Daily', callback_data: 'recur_daily' }, { text: '📅 Weekly', callback_data: 'recur_weekly' }],
+          [{ text: '📅 Daily', callback_data: 'recur_daily' }, { text: '📅 Every 3 Days', callback_data: 'recur_3days' }],
+          [{ text: '📅 Weekly', callback_data: 'recur_weekly' }],
           ...backButton('admin_broadcast'),
         ],
       },
@@ -1428,18 +1537,36 @@ async function handleAdminPanel(chatId, from) {
   const totalOrders = await Order.countDocuments();
   const pendingSellers = await Seller.countDocuments({ status: 'pending' });
   const totalUsers = await User.countDocuments();
+  const scheduledBroadcasts = await Broadcast.countDocuments({ status: 'scheduled' });
 
   bot.sendMessage(chatId,
-    `⚙️ *Admin Panel*\n\n📦 Products: *${totalProducts}*\n📋 Orders: *${totalOrders}*\n👥 Users: *${totalUsers}*\n🏪 Pending Sellers: *${pendingSellers}*`, {
+    `⚙️ *Admin Panel*\n\n📦 Products: *${totalProducts}*\n📋 Orders: *${totalOrders}*\n👥 Users: *${totalUsers}*\n🏪 Pending Sellers: *${pendingSellers}*\n📢 Scheduled Broadcasts: *${scheduledBroadcasts}*`, {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
           [{ text: '🏪 Manage Sellers', callback_data: 'admin_sellers' }, { text: '📊 Stats', callback_data: 'admin_stats' }],
           [{ text: '📋 Recent Orders', callback_data: 'admin_orders' }],
+          [{ text: '📢 Broadcast Center', callback_data: 'admin_broadcast' }],
+          [{ text: '🤖 AI Admin Tools', callback_data: 'admin_ai' }],
           ...backButton(),
         ],
       },
     });
+}
+
+async function handleAdminAI(chatId, from) {
+  if (!isAdminUser(from)) return;
+  bot.sendMessage(chatId, `🤖 *AI Admin Tools*\n\nLet AI help you run GSCF Store more efficiently:`, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '✍️ AI Compose Anything', callback_data: 'adminai_compose' }],
+        [{ text: '📢 AI Write Broadcast', callback_data: 'bc_ai_compose' }],
+        [{ text: '⏰ AI Schedule Broadcasts', callback_data: 'bc_ai_schedule' }],
+        ...backButton('menu_admin'),
+      ],
+    },
+  });
 }
 
 async function handleAdminSellers(chatId, from) {

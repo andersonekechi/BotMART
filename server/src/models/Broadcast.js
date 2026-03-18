@@ -14,6 +14,10 @@ const broadcastSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    endsAt: {
+      type: Date,
+      default: null,
+    },
     status: {
       type: String,
       enum: ['scheduled', 'sent', 'cancelled'],
@@ -33,7 +37,7 @@ const broadcastSchema = new mongoose.Schema(
     },
     repeat: {
       type: String,
-      enum: ['none', 'daily', 'weekly'],
+      enum: ['none', 'daily', 'weekly', 'every_3_days'],
       default: 'none',
     },
   },

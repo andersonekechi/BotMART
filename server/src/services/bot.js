@@ -22,12 +22,8 @@ function initBot() {
   const webhookUrl = process.env.WEBHOOK_URL || '';
   const isWebhook = process.env.NODE_ENV === 'production' && webhookUrl.startsWith('https://');
 
-  bot = new TelegramBot(token, {
-    polling: !isWebhook,
-    webHook: isWebhook ? { port: false } : false,
-  });
-
   if (isWebhook) {
+    bot = new TelegramBot(token, { webHook: { port: false } });
     const fullUrl = `${webhookUrl}/api/bot/webhook`;
     bot.setWebHook(fullUrl).then(() => {
       console.log(`Webhook set: ${fullUrl}`);
@@ -35,11 +31,22 @@ function initBot() {
       console.error('Failed to set webhook:', err.message);
     });
   } else {
-    console.log('Bot started in polling mode (use HTTPS WEBHOOK_URL for webhook mode)');
+    bot = new TelegramBot(token, {
+      polling: {
+        interval: 1000,
+        autoStart: true,
+        params: { timeout: 30 },
+      },
+    });
+    console.log('Bot started in polling mode');
   }
 
   bot.on('polling_error', (err) => {
-    console.error('Polling error:', err.code, err.message);
+    if (err.code === 'EFATAL') {
+      console.error('Polling fatal error, will auto-recover:', err.message);
+    } else {
+      console.error('Polling error:', err.code, err.message);
+    }
   });
 
   bot.on('error', (err) => {

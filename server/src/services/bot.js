@@ -348,6 +348,19 @@ async function handleOrders(chatId, from) {
 // ─── Seller Menu ────────────────────────────────────────
 async function handleSellMenu(chatId, from) {
   const existing = await Seller.findOne({ telegramId: from.id });
+
+  if (!existing && isAdminUser(from)) {
+    const seller = await Seller.create({
+      telegramId: from.id,
+      username: from.username || '',
+      firstName: from.first_name || '',
+      storeName: 'GSCF Official',
+      storeDescription: 'Official GSCF Store products',
+      status: 'approved',
+    });
+    return showSellerDashboard(chatId, seller);
+  }
+
   if (existing) {
     if (existing.status === 'pending') {
       return bot.sendMessage(chatId, '⏳ *Application Pending*\n\nYour seller application is being reviewed.\nYou\'ll be notified once approved.', {
@@ -1225,23 +1238,31 @@ async function handleStatefulMessage(msg, state) {
   // Seller application — store description
   if (state.action === 'seller_desc') {
     clearState(from.id);
+    const autoApprove = isAdminUser(from);
     const seller = await Seller.create({
       telegramId: from.id,
       username: from.username || '',
       firstName: from.first_name || '',
       storeName: state.storeName,
       storeDescription: text,
-      status: 'pending',
+      status: autoApprove ? 'approved' : 'pending',
     });
 
-    bot.sendMessage(chatId, `✅ *Application Submitted!*\n\n🏪 Store: *${state.storeName}*\n📝 ${text}\n\n⏳ An admin will review your application. You'll be notified once approved.`, {
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: backButton() },
-    });
+    if (autoApprove) {
+      bot.sendMessage(chatId, `✅ *Seller Account Created!*\n\n🏪 Store: *${state.storeName}*\n\n_Auto-approved (admin account)._`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[{ text: '🏪 Seller Dashboard', callback_data: 'menu_sell' }], ...backButton()] },
+      });
+    } else {
+      bot.sendMessage(chatId, `✅ *Application Submitted!*\n\n🏪 Store: *${state.storeName}*\n📝 ${text}\n\n⏳ An admin will review your application. You'll be notified once approved.`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: backButton() },
+      });
 
-    notifyAdmins(`🏪 *New Seller Application*\n\nStore: *${state.storeName}*\nUser: @${from.username || 'N/A'}\nDescription: ${text}`, [
-      [{ text: '✅ Approve', callback_data: `aapprove_${seller._id}` }, { text: '❌ Reject', callback_data: `asuspend_${seller._id}` }],
-    ]);
+      notifyAdmins(`🏪 *New Seller Application*\n\nStore: *${state.storeName}*\nUser: @${from.username || 'N/A'}\nDescription: ${text}`, [
+        [{ text: '✅ Approve', callback_data: `aapprove_${seller._id}` }, { text: '❌ Reject', callback_data: `asuspend_${seller._id}` }],
+      ]);
+    }
     return;
   }
 

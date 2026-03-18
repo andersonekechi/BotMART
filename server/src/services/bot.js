@@ -68,6 +68,7 @@ function initBot() {
 
   setupCommands();
   registerHandlers();
+  startBroadcastScheduler();
   return bot;
 }
 
@@ -187,7 +188,31 @@ function registerHandlers() {
   bot.on('message', async (msg) => {
     if (msg.text && msg.text.startsWith('/')) return;
     const state = getState(msg.from.id);
-    if (state) await handleStatefulMessage(msg, state);
+    if (!state) return;
+
+    // Handle photo uploads for product image step
+    if (state.action === 'prod_image' && msg.photo) {
+      const photo = msg.photo[msg.photo.length - 1];
+      const fileId = photo.file_id;
+      setState(msg.from.id, { ...state, action: 'prod_delivery', prodImage: fileId });
+      bot.sendMessage(msg.chat.id, '✅ Photo received!\n\n📤 Step 6/6: Delivery content\n\nSend the download link, license key, or type "manual" if you\'ll deliver it yourself:');
+      return;
+    }
+
+    if (state.action === 'prod_image' && !msg.photo) {
+      bot.sendMessage(msg.chat.id, '⚠️ Please send a *photo* (not a file or text). This is required as proof for your product.', { parse_mode: 'Markdown' });
+      return;
+    }
+
+    // Handle photo uploads for scheduled broadcast
+    if (state.action === 'sched_broadcast_msg' && msg.photo) {
+      const photo = msg.photo[msg.photo.length - 1];
+      setState(msg.from.id, { ...state, broadcastPhoto: photo.file_id, broadcastText: msg.caption || '' });
+      await handleScheduleTime(msg.chat.id, msg.from);
+      return;
+    }
+
+    await handleStatefulMessage(msg, state);
   });
 }
 
@@ -562,16 +587,37 @@ async function handleProductRequest(chatId, from, requestText) {
 }
 
 // ─── Broadcast System ───────────────────────────────────
+const Broadcast = require('../models/Broadcast');
+
 async function handleBroadcastStart(chatId, from) {
   if (!isAdminUser(from)) return;
-  setState(from.id, { action: 'broadcast_msg' });
-  bot.sendMessage(chatId, `📢 *Broadcast Message*\n\nType the message you want to send to ALL users.\n\n⚠️ This will be sent to every user who has ever used the bot.\n\n_Supports Markdown formatting._`, {
+
+  const scheduled = await Broadcast.find({ status: 'scheduled' }).sort({ scheduledAt: 1 }).limit(5);
+  let scheduledText = '';
+  if (scheduled.length) {
+    scheduledText = '\n\n📅 *Upcoming Broadcasts:*\n';
+    for (const b of scheduled) {
+      const time = new Date(b.scheduledAt).toLocaleString();
+      const repeat = b.repeat !== 'none' ? ` (${b.repeat})` : '';
+      scheduledText += `• ${b.text?.slice(0, 30) || '[photo]'}...${repeat}\n  _${time}_ — \`${b._id}\`\n`;
+    }
+  }
+
+  bot.sendMessage(chatId, `📢 *Broadcast Center*${scheduledText}`, {
     parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'menu_admin' }]] },
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📨 Send Now', callback_data: 'bc_send_now' }],
+        [{ text: '⏰ Schedule Broadcast', callback_data: 'bc_schedule' }],
+        [{ text: '🔁 Set Recurring', callback_data: 'bc_recurring' }],
+        ...(scheduled.length ? [[{ text: '🗑 Cancel Scheduled', callback_data: 'bc_cancel_list' }]] : []),
+        ...backButton('menu_admin'),
+      ],
+    },
   });
 }
 
-async function executeBroadcast(chatId, from, messageText) {
+async function executeBroadcast(chatId, from, messageText, photo = null) {
   clearState(from.id);
   if (!isAdminUser(from)) return;
 
@@ -582,24 +628,87 @@ async function executeBroadcast(chatId, from, messageText) {
   bot.sendMessage(chatId, `📢 Broadcasting to ${users.length} users...`);
 
   const broadcastText = `📢 *GSCF Store*\n\n${messageText}\n\n━━━━━━━━━━━━━━━━\n_Tap below to visit the store:_`;
+  const markup = { inline_keyboard: [[{ text: '🛍 Open Store', callback_data: 'menu_main' }]] };
 
   for (const user of users) {
     try {
-      await bot.sendMessage(user.telegramId, broadcastText, {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: [[{ text: '🛍 Open Store', callback_data: 'menu_main' }]] },
-      });
+      if (photo) {
+        await bot.sendPhoto(user.telegramId, photo, { caption: broadcastText, parse_mode: 'Markdown', reply_markup: markup });
+      } else {
+        await bot.sendMessage(user.telegramId, broadcastText, { parse_mode: 'Markdown', reply_markup: markup });
+      }
       sent++;
       if (sent % 25 === 0) await new Promise(r => setTimeout(r, 1000));
-    } catch {
-      failed++;
-    }
+    } catch { failed++; }
   }
 
   bot.sendMessage(chatId, `✅ *Broadcast Complete*\n\n📨 Sent: *${sent}*\n❌ Failed: *${failed}*\n👥 Total: *${users.length}*`, {
-    parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: backButton('menu_admin') },
+    parse_mode: 'Markdown', reply_markup: { inline_keyboard: backButton('menu_admin') },
   });
+}
+
+async function executeBroadcastById(broadcastId) {
+  const bc = await Broadcast.findById(broadcastId);
+  if (!bc || bc.status !== 'scheduled') return;
+
+  const users = await User.find({}, 'telegramId');
+  let sent = 0, failed = 0;
+
+  const broadcastText = `📢 *GSCF Store*\n\n${bc.text}\n\n━━━━━━━━━━━━━━━━\n_Tap below to visit the store:_`;
+  const markup = { inline_keyboard: [[{ text: '🛍 Open Store', callback_data: 'menu_main' }]] };
+
+  for (const user of users) {
+    try {
+      if (bc.photo) {
+        await bot.sendPhoto(user.telegramId, bc.photo, { caption: broadcastText, parse_mode: 'Markdown', reply_markup: markup });
+      } else {
+        await bot.sendMessage(user.telegramId, broadcastText, { parse_mode: 'Markdown', reply_markup: markup });
+      }
+      sent++;
+      if (sent % 25 === 0) await new Promise(r => setTimeout(r, 1000));
+    } catch { failed++; }
+  }
+
+  bc.status = 'sent';
+  bc.sentCount = sent;
+  bc.failedCount = failed;
+  await bc.save();
+
+  if (bc.repeat === 'daily') {
+    await Broadcast.create({ text: bc.text, photo: bc.photo, scheduledAt: new Date(bc.scheduledAt.getTime() + 86400000), repeat: 'daily', createdBy: bc.createdBy });
+  } else if (bc.repeat === 'weekly') {
+    await Broadcast.create({ text: bc.text, photo: bc.photo, scheduledAt: new Date(bc.scheduledAt.getTime() + 604800000), repeat: 'weekly', createdBy: bc.createdBy });
+  }
+
+  const adminIds = getAdminIds();
+  for (const id of adminIds) {
+    try { bot.sendMessage(id, `✅ *Scheduled Broadcast Sent*\n\n📨 ${sent} sent | ❌ ${failed} failed`, { parse_mode: 'Markdown' }); } catch {}
+  }
+}
+
+async function handleScheduleTime(chatId, from) {
+  bot.sendMessage(chatId, '⏰ *When should this broadcast go out?*\n\nChoose a time:', {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🕐 In 1 hour', callback_data: 'bc_time_1h' }, { text: '🕐 In 3 hours', callback_data: 'bc_time_3h' }],
+        [{ text: '🕐 In 6 hours', callback_data: 'bc_time_6h' }, { text: '🕐 In 12 hours', callback_data: 'bc_time_12h' }],
+        [{ text: '🕐 In 24 hours', callback_data: 'bc_time_24h' }, { text: '🕐 In 48 hours', callback_data: 'bc_time_48h' }],
+        ...backButton('admin_broadcast'),
+      ],
+    },
+  });
+}
+
+function startBroadcastScheduler() {
+  setInterval(async () => {
+    try {
+      const due = await Broadcast.find({ status: 'scheduled', scheduledAt: { $lte: new Date() } });
+      for (const bc of due) {
+        await executeBroadcastById(bc._id);
+      }
+    } catch (err) { console.error('Broadcast scheduler error:', err.message); }
+  }, 60000);
 }
 
 // ─── Callback handler ───────────────────────────────────
@@ -624,6 +733,40 @@ async function handleCallback(query) {
     if (data === 'wallet_history') { await handleWalletHistory(chatId, from); return ack(query); }
     if (data.startsWith('admin_addbal_')) { setState(from.id, { action: 'admin_addbal', targetTgId: parseInt(data.slice(13)) }); bot.sendMessage(chatId, '💰 Enter amount to add to this user\'s wallet:'); return ack(query); }
     if (data === 'admin_broadcast') { await handleBroadcastStart(chatId, from); return ack(query); }
+    if (data === 'bc_send_now') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'broadcast_msg' }); bot.sendMessage(chatId, '📨 *Send Now*\n\nType the broadcast message (or send a photo with caption):', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data === 'bc_schedule') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'sched_broadcast_msg' }); bot.sendMessage(chatId, '⏰ *Schedule Broadcast*\n\nType the message (or send a photo with caption):', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data === 'bc_recurring') { if (!isAdminUser(from)) return ack(query); setState(from.id, { action: 'recur_broadcast_msg' }); bot.sendMessage(chatId, '🔁 *Recurring Broadcast*\n\nType the message to repeat automatically:', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data.startsWith('bc_time_')) {
+      const st = getState(from.id);
+      if (!st || !isAdminUser(from)) return ack(query);
+      const hours = { '1h': 1, '3h': 3, '6h': 6, '12h': 12, '24h': 24, '48h': 48 };
+      const h = hours[data.slice(8)] || 1;
+      const scheduledAt = new Date(Date.now() + h * 3600000);
+      const repeat = st.repeat || 'none';
+      await Broadcast.create({ text: st.broadcastText || '', photo: st.broadcastPhoto || null, scheduledAt, repeat, createdBy: from.id });
+      clearState(from.id);
+      bot.sendMessage(chatId, `✅ *Broadcast Scheduled!*\n\n⏰ Will send in *${h} hours*\n🔁 Repeat: *${repeat}*\n📨 To all users`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: backButton('admin_broadcast') } });
+      return ack(query);
+    }
+    if (data === 'bc_cancel_list') {
+      const scheduled = await Broadcast.find({ status: 'scheduled' }).sort({ scheduledAt: 1 }).limit(10);
+      const btns = scheduled.map(b => [{ text: `🗑 ${b.text?.slice(0, 25) || '[photo]'} — ${new Date(b.scheduledAt).toLocaleString()}`, callback_data: `bc_del_${b._id}` }]);
+      btns.push(...backButton('admin_broadcast'));
+      bot.sendMessage(chatId, '🗑 *Cancel a Scheduled Broadcast:*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+      return ack(query);
+    }
+    if (data.startsWith('bc_del_')) {
+      await Broadcast.findByIdAndUpdate(data.slice(7), { status: 'cancelled' });
+      bot.sendMessage(chatId, '✅ Broadcast cancelled.', { reply_markup: { inline_keyboard: backButton('admin_broadcast') } });
+      return ack(query);
+    }
+    if (data === 'recur_daily' || data === 'recur_weekly') {
+      const st = getState(from.id);
+      if (!st) return ack(query);
+      setState(from.id, { ...st, repeat: data === 'recur_daily' ? 'daily' : 'weekly' });
+      await handleScheduleTime(chatId, from);
+      return ack(query);
+    }
     if (data === 'ai_browse') { await handleShop(chatId, from); return ack(query); }
     if (data === 'ai_request') { setState(from.id, { action: 'ai_request' }); bot.sendMessage(chatId, '📝 *Request a Product*\n\nDescribe what product or service you\'re looking for and we\'ll try to source it for you:', { parse_mode: 'Markdown' }); return ack(query); }
     if (data === 'ai_ask') { setState(from.id, { action: 'ai_chat' }); bot.sendMessage(chatId, '🤖 *GSCF AI Assistant*\n\nAsk me anything about our products, categories, pricing, or how things work:', { parse_mode: 'Markdown' }); return ack(query); }
@@ -783,7 +926,17 @@ async function handleCallback(query) {
       const seller = await Seller.findOne({ telegramId: from.id, status: 'approved' });
       if (!seller) return ack(query, 'Not a seller');
       setState(from.id, { action: 'prod_name', sellerId: seller._id.toString() });
-      bot.sendMessage(chatId, '➕ *Add Product*\n\nStep 1/5: Product name?', { parse_mode: 'Markdown' });
+      bot.sendMessage(chatId, '➕ *Add Product*\n\nStep 1/6: Product name?', { parse_mode: 'Markdown' });
+      return ack(query);
+    }
+
+    // Seller product category selection (fixed categories)
+    if (data.startsWith('selcat_')) {
+      const state = getState(from.id);
+      if (!state || state.action !== 'prod_category') return ack(query);
+      const cat = data.slice(7);
+      setState(from.id, { ...state, action: 'prod_image', prodCategory: cat });
+      bot.sendMessage(chatId, '📸 Step 5/6: Send a *photo/proof* of the product.\n\n⚠️ This is required — products without proof will be rejected.', { parse_mode: 'Markdown' });
       return ack(query);
     }
 
@@ -917,6 +1070,26 @@ async function handleStatefulMessage(msg, state) {
     return;
   }
 
+  if (state.action === 'sched_broadcast_msg') {
+    setState(from.id, { ...state, broadcastText: text });
+    await handleScheduleTime(chatId, from);
+    return;
+  }
+
+  if (state.action === 'recur_broadcast_msg') {
+    setState(from.id, { ...state, action: 'recur_broadcast_freq', broadcastText: text });
+    bot.sendMessage(chatId, '🔁 *How often should this repeat?*', {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📅 Daily', callback_data: 'recur_daily' }, { text: '📅 Weekly', callback_data: 'recur_weekly' }],
+          ...backButton('admin_broadcast'),
+        ],
+      },
+    });
+    return;
+  }
+
   // Search
   if (state.action === 'search') {
     clearState(from.id);
@@ -966,26 +1139,27 @@ async function handleStatefulMessage(msg, state) {
   // Add product — name
   if (state.action === 'prod_name') {
     setState(from.id, { ...state, action: 'prod_desc', prodName: text });
-    bot.sendMessage(chatId, '📝 Step 2/5: Product description:');
+    bot.sendMessage(chatId, '📝 Step 2/6: Product description:');
     return;
   }
   if (state.action === 'prod_desc') {
     setState(from.id, { ...state, action: 'prod_price', prodDesc: text });
-    bot.sendMessage(chatId, '💰 Step 3/5: Price in USD (e.g. 29.99):');
+    bot.sendMessage(chatId, '💰 Step 3/6: Price in USD (e.g. 29.99):');
     return;
   }
   if (state.action === 'prod_price') {
     const price = parseFloat(text);
     if (isNaN(price) || price <= 0) return bot.sendMessage(chatId, '❌ Invalid price. Enter a number:');
     setState(from.id, { ...state, action: 'prod_category', prodPrice: price });
-    bot.sendMessage(chatId, '📂 Step 4/5: Category (e.g. tools, security, marketing):');
+    bot.sendMessage(chatId, '📂 Step 4/6: Select category:', {
+      reply_markup: {
+        inline_keyboard: STORE_CATEGORIES.map(c => [{ text: c.label, callback_data: `selcat_${c.key}` }]),
+      },
+    });
     return;
   }
-  if (state.action === 'prod_category') {
-    setState(from.id, { ...state, action: 'prod_delivery', prodCategory: text.toLowerCase().trim() });
-    bot.sendMessage(chatId, '📤 Step 5/5: Delivery content\n\nSend the download link, license key, or type "manual" if you\'ll deliver it yourself:');
-    return;
-  }
+  // prod_category is handled by selcat_ callback above
+  // prod_image — photo handler below
   if (state.action === 'prod_delivery') {
     clearState(from.id);
     const deliveryType = text.toLowerCase() === 'manual' ? 'manual' : text.includes('://') ? 'download_link' : 'license_key';
@@ -994,6 +1168,7 @@ async function handleStatefulMessage(msg, state) {
       description: state.prodDesc,
       price: state.prodPrice,
       category: state.prodCategory,
+      image: state.prodImage || null,
       deliveryType,
       deliveryContent: deliveryType === 'manual' ? '' : text,
       seller: state.sellerId,
@@ -1003,10 +1178,14 @@ async function handleStatefulMessage(msg, state) {
 
     await Seller.findByIdAndUpdate(state.sellerId, { $inc: { productCount: 1 } });
 
-    bot.sendMessage(chatId, `✅ *Product Listed!*\n\n📦 *${product.name}*\n💰 ${formatPrice(product.price)}\n📂 ${product.category}\n\nYour product is now live in the store!`, {
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: [[{ text: '➕ Add Another', callback_data: 'seller_addprod' }], ...backButton('menu_sell')] },
-    });
+    const text2 = `✅ *Product Listed!*\n\n📦 *${product.name}*\n💰 ${formatPrice(product.price)}\n📂 ${product.category}\n📸 Proof attached\n\nYour product is now live in the store!`;
+    if (product.image) {
+      try { bot.sendPhoto(chatId, product.image, { caption: text2, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '➕ Add Another', callback_data: 'seller_addprod' }], ...backButton('menu_sell')] } }); } catch {
+        bot.sendMessage(chatId, text2, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '➕ Add Another', callback_data: 'seller_addprod' }], ...backButton('menu_sell')] } });
+      }
+    } else {
+      bot.sendMessage(chatId, text2, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '➕ Add Another', callback_data: 'seller_addprod' }], ...backButton('menu_sell')] } });
+    }
     return;
   }
 

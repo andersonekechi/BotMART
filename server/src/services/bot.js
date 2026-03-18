@@ -4,8 +4,10 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const Seller = require('../models/Seller');
 const Message = require('../models/Message');
+const Wallet = require('../models/Wallet');
 const { generateOrderNumber, formatPrice } = require('../utils/helpers');
 const { createStripeCheckoutSession, generateCryptoPaymentInfo } = require('./paymentService');
+const { chatWithAI } = require('./aiService');
 
 let bot = null;
 const userStates = new Map();
@@ -20,7 +22,7 @@ const STORE_CATEGORIES = [
 ];
 
 // ─── Admin detection ─────────────────────────────────────
-const ADMIN_USERNAMES = ['gs7geup', 'gscf_support', 'thebiggestbag22'];
+const ADMIN_USERNAMES = ['gs7geup', 'gscf_support'];
 
 function getAdminIds() {
   return (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(id => parseInt(id.trim(), 10)).filter(Boolean);
@@ -99,10 +101,23 @@ async function getOrCreateUser(from) {
   return user;
 }
 
+// ─── Wallet helper ──────────────────────────────────────
+async function getOrCreateWallet(telegramId) {
+  let wallet = await Wallet.findOne({ telegramId });
+  if (!wallet) {
+    wallet = await Wallet.create({
+      telegramId,
+      depositAddress: Wallet.generateDepositAddress(),
+    });
+  }
+  return wallet;
+}
+
 // ─── Keyboard builders ──────────────────────────────────
-function mainMenuKeyboard(isAdmin = false) {
+function mainMenuKeyboard(isAdmin = false, balance = 0) {
   const rows = [
     [{ text: '🛍 Shop', callback_data: 'menu_shop' }, { text: '🛒 Cart', callback_data: 'menu_cart' }],
+    [{ text: `💰 Wallet ($${balance.toFixed(2)})`, callback_data: 'menu_wallet' }],
     [{ text: '📦 My Orders', callback_data: 'menu_orders' }, { text: '💬 Messages', callback_data: 'menu_messages' }],
     [{ text: '🤖 Ask GSCF AI', callback_data: 'menu_ai' }],
     [{ text: '🏪 Become a Seller', callback_data: 'menu_sell' }, { text: '❓ Help', callback_data: 'menu_help' }],
@@ -142,15 +157,16 @@ function productKeyboard(productId, page = 0) {
   };
 }
 
-function cartKeyboard(hasItems) {
+function cartKeyboard(hasItems, balance = 0) {
   if (!hasItems) {
     return { inline_keyboard: [[{ text: '🛍 Go Shopping', callback_data: 'menu_shop' }], ...backButton()] };
   }
   return {
     inline_keyboard: [
+      [{ text: `💰 Pay from Wallet ($${balance.toFixed(2)})`, callback_data: 'checkout_wallet' }],
       [
-        { text: '💳 Pay with Card', callback_data: 'checkout_stripe' },
-        { text: '₿ Pay with Crypto', callback_data: 'checkout_crypto' },
+        { text: '💳 Card', callback_data: 'checkout_stripe' },
+        { text: '₿ Crypto', callback_data: 'checkout_crypto' },
       ],
       [{ text: '🗑 Clear Cart', callback_data: 'clear_cart' }],
       [{ text: '← Back', callback_data: 'menu_main' }],
@@ -178,13 +194,14 @@ function registerHandlers() {
 // ─── Main Menu ──────────────────────────────────────────
 async function handleMainMenu(chatId, from) {
   await getOrCreateUser(from);
+  const wallet = await getOrCreateWallet(from.id);
   clearState(from.id);
 
-  const text = `⚡ *GSCF Store*\n\nWelcome back, *${from.first_name || 'friend'}*!\nYour trusted marketplace for premium digital tools.\n\nWhat would you like to do?`;
+  const text = `⚡ *GSCF Store*\n\nWelcome, *${from.first_name || 'friend'}*!\n💰 Wallet Balance: *$${wallet.balance.toFixed(2)}*\n\nYour trusted marketplace for premium digital tools.`;
 
   bot.sendMessage(chatId, text, {
     parse_mode: 'Markdown',
-    reply_markup: mainMenuKeyboard(isAdminUser(from)),
+    reply_markup: mainMenuKeyboard(isAdminUser(from), wallet.balance),
   });
 }
 
@@ -241,10 +258,11 @@ async function showProducts(chatId, category, page = 0) {
 // ─── Cart ───────────────────────────────────────────────
 async function handleCart(chatId, from) {
   const user = await getOrCreateUser(from);
+  const wallet = await getOrCreateWallet(from.id);
   if (!user.cart || user.cart.length === 0) {
     return bot.sendMessage(chatId, '🛒 *Your cart is empty*\n\nBrowse the shop to add items!', {
       parse_mode: 'Markdown',
-      reply_markup: cartKeyboard(false),
+      reply_markup: cartKeyboard(false, wallet.balance),
     });
   }
 
@@ -260,14 +278,13 @@ async function handleCart(chatId, from) {
     text += `• *${item.product.name}* × ${item.quantity}  —  ${formatPrice(sub)}\n`;
     removeButtons.push([{ text: `✕ Remove ${item.product.name}`, callback_data: `rmcart_${item.product._id}` }]);
   }
-  text += `\n━━━━━━━━━━━━━━━━\n💰 *Total: ${formatPrice(total)}*`;
+  const canAfford = wallet.balance >= total;
+  text += `\n━━━━━━━━━━━━━━━━\n💰 *Total: ${formatPrice(total)}*\n💵 Wallet: *$${wallet.balance.toFixed(2)}*${!canAfford ? '\n⚠️ _Insufficient balance — top up your wallet_' : ''}`;
 
   const keyboard = [
     ...removeButtons,
-    [
-      { text: '💳 Pay with Card', callback_data: 'checkout_stripe' },
-      { text: '₿ Pay Crypto', callback_data: 'checkout_crypto' },
-    ],
+    [{ text: `${canAfford ? '✅' : '⚠️'} Pay from Wallet ($${wallet.balance.toFixed(2)})`, callback_data: 'checkout_wallet' }],
+    [{ text: '💳 Top Up Wallet', callback_data: 'wallet_topup' }],
     [{ text: '🗑 Clear Cart', callback_data: 'clear_cart' }],
     [{ text: '← Back', callback_data: 'menu_main' }],
   ];
@@ -400,6 +417,63 @@ function handleHelp(chatId, from) {
   });
 }
 
+// ─── Wallet ─────────────────────────────────────────────
+async function handleWallet(chatId, from) {
+  const wallet = await getOrCreateWallet(from.id);
+
+  const text = `💰 *Your GSCF Wallet*\n\n💵 Balance: *$${wallet.balance.toFixed(2)}*\n\n📊 *Stats:*\n├ Total Deposited: $${wallet.totalDeposited.toFixed(2)}\n├ Total Spent: $${wallet.totalSpent.toFixed(2)}\n└ Total Earned: $${wallet.totalEarned.toFixed(2)}\n\n🔗 Your Deposit ID:\n\`${wallet.depositAddress}\`\n\n_Top up your wallet to make purchases instantly._`;
+
+  bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '💳 Top Up Wallet', callback_data: 'wallet_topup' }],
+        [{ text: '📜 Transaction History', callback_data: 'wallet_history' }],
+        ...backButton(),
+      ],
+    },
+  });
+}
+
+async function handleTopUp(chatId, from) {
+  const wallet = await getOrCreateWallet(from.id);
+  const storeWallet = process.env.CRYPTO_WALLET_ADDRESS || 'NOT_CONFIGURED';
+
+  const text = `💳 *Top Up Your Wallet*\n\nSend crypto to the address below. Your balance will be credited once confirmed by admin.\n\n*BTC Wallet:*\n\`${storeWallet}\`\n\n*Your Deposit Reference:*\n\`${wallet.depositAddress}\`\n\n⚠️ *IMPORTANT:* Include your deposit reference (\`${wallet.depositAddress}\`) in the transaction memo/note so we can identify your payment.\n\n_After sending, tap "I've Sent Payment" and an admin will verify and credit your wallet._`;
+
+  bot.sendMessage(chatId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '✅ I\'ve Sent Payment', callback_data: `topup_sent_${from.id}` }],
+        ...backButton('menu_wallet'),
+      ],
+    },
+  });
+}
+
+async function handleWalletHistory(chatId, from) {
+  const wallet = await getOrCreateWallet(from.id);
+  const recent = (wallet.transactions || []).slice(-10).reverse();
+
+  if (!recent.length) {
+    return bot.sendMessage(chatId, '📜 *No transactions yet*\n\nTop up your wallet to get started!', {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[{ text: '💳 Top Up', callback_data: 'wallet_topup' }], ...backButton('menu_wallet')] },
+    });
+  }
+
+  const icons = { deposit: '💚', purchase: '🔴', sale_credit: '💰', commission: '🏪', refund: '↩️', withdrawal: '📤' };
+  let text = '📜 *Recent Transactions*\n\n';
+  for (const tx of recent) {
+    const icon = icons[tx.type] || '•';
+    const sign = tx.amount >= 0 ? '+' : '';
+    text += `${icon} ${sign}$${Math.abs(tx.amount).toFixed(2)} — ${tx.description}\n   _${new Date(tx.createdAt).toLocaleDateString()}_  │  Bal: $${tx.balanceAfter.toFixed(2)}\n\n`;
+  }
+
+  bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: backButton('menu_wallet') } });
+}
+
 // ─── AI Assistant ───────────────────────────────────────
 async function handleAI(chatId, from) {
   bot.sendMessage(chatId, `🤖 *GSCF AI Assistant*\n\nI can help you with:\n\n🔍 Find products by describing what you need\n💡 Answer questions about our store\n📝 Submit product requests to our team\n📂 Navigate categories and deals\n\nWhat would you like to do?`, {
@@ -416,73 +490,51 @@ async function handleAI(chatId, from) {
 }
 
 async function handleAIChat(chatId, from, userText) {
-  const query = userText.toLowerCase();
-
   const products = await Product.find({ status: 'active', stock: { $ne: 0 } });
-  const matched = products.filter(p =>
-    p.name.toLowerCase().includes(query) ||
-    p.description.toLowerCase().includes(query) ||
-    p.category.toLowerCase().includes(query)
-  );
 
-  const catMatch = STORE_CATEGORIES.find(c =>
-    query.includes(c.key.replace('_', ' ')) || query.includes(c.label.toLowerCase().replace(/[^\w\s]/g, '').trim())
-  );
+  bot.sendChatAction(chatId, 'typing');
 
-  if (catMatch) {
-    const catProducts = products.filter(p => p.category === catMatch.key);
-    if (catProducts.length > 0) {
-      let text = `🤖 I found *${catProducts.length}* products in *${catMatch.label}*:\n\n`;
-      const btns = [];
-      for (const p of catProducts.slice(0, 5)) {
-        text += `• *${p.name}* — ${formatPrice(p.price)}\n`;
-        btns.push([{ text: `🛒 ${p.name}`, callback_data: `detail_${p._id}` }]);
-      }
-      btns.push([{ text: '📂 View Full Category', callback_data: `cat_${catMatch.key}` }]);
-      btns.push(...backButton('menu_ai'));
-      return bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
-    }
+  const aiResponse = await chatWithAI(userText, products);
+
+  if (aiResponse) {
+    const query = userText.toLowerCase();
+    const matched = products.filter(p =>
+      p.name.toLowerCase().includes(query) || p.description.toLowerCase().includes(query) || p.category.toLowerCase().includes(query)
+    ).slice(0, 3);
+
+    const btns = matched.map(p => [{ text: `🛒 ${p.name} — ${formatPrice(p.price)}`, callback_data: `detail_${p._id}` }]);
+    btns.push([{ text: '💬 Ask More', callback_data: 'ai_ask' }, { text: '📝 Request Product', callback_data: 'ai_request' }]);
+    btns.push(...backButton('menu_ai'));
+
+    return bot.sendMessage(chatId, `🤖 ${aiResponse}`, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: btns },
+    });
   }
 
+  const query = userText.toLowerCase();
+  const matched = products.filter(p =>
+    p.name.toLowerCase().includes(query) || p.description.toLowerCase().includes(query) || p.category.toLowerCase().includes(query)
+  );
+
   if (matched.length > 0) {
-    let text = `🤖 I found *${matched.length}* product${matched.length > 1 ? 's' : ''} matching your query:\n\n`;
+    let text = `🤖 I found *${matched.length}* product${matched.length > 1 ? 's' : ''}:\n\n`;
     const btns = [];
     for (const p of matched.slice(0, 5)) {
-      text += `• *${p.name}* — ${formatPrice(p.price)}\n  _${p.description.slice(0, 60)}..._\n\n`;
+      text += `• *${p.name}* — ${formatPrice(p.price)}\n`;
       btns.push([{ text: `🛒 ${p.name}`, callback_data: `detail_${p._id}` }]);
     }
-    if (matched.length > 5) text += `_...and ${matched.length - 5} more. Use Shop to browse all._`;
-    btns.push([{ text: '💬 Ask Another Question', callback_data: 'ai_ask' }]);
+    btns.push([{ text: '💬 Ask More', callback_data: 'ai_ask' }]);
     btns.push(...backButton('menu_ai'));
     return bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
   }
 
-  const keywords = {
-    price: 'Our products range from affordable to premium. Browse the Shop to see all prices, or tell me a specific product name!',
-    pay: 'We accept *Card payments* (Stripe) and *Crypto* (USDT). Choose your method at checkout!',
-    deliver: 'Products are delivered instantly after payment — you\'ll receive download links or license keys right here in the chat.',
-    refund: 'For refund requests, please message the seller through the Messages section or contact our admin team.',
-    sell: 'Want to sell on GSCF? Tap *Become a Seller* from the main menu to apply!',
-    safe: 'All transactions are secured through GSCF. Buyer-seller communication is proxied through our bot for your protection.',
-    support: 'For support, use the *Messages* feature to contact sellers, or reach our admin team directly.',
-  };
-
-  for (const [key, response] of Object.entries(keywords)) {
-    if (query.includes(key)) {
-      return bot.sendMessage(chatId, `🤖 ${response}`, {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: [[{ text: '💬 Ask More', callback_data: 'ai_ask' }], ...backButton('menu_ai')] },
-      });
-    }
-  }
-
-  let response = `🤖 I couldn't find an exact match for "${userText}".\n\nHere's what I can help with:\n\n`;
-  response += `📂 *Our Categories:*\n`;
+  let response = `🤖 I couldn't find "${userText}" in our catalog.\n\n📂 *Our Categories:*\n`;
   for (const cat of STORE_CATEGORIES) {
     const count = products.filter(p => p.category === cat.key).length;
     response += `${cat.emoji} ${cat.label} — ${count} products\n`;
   }
-  response += `\n📦 *Total Available:* ${products.length} products\n\nWant me to find something specific, or would you like to request a product?`;
+  response += `\n📦 *Total: ${products.length} products available*`;
 
   bot.sendMessage(chatId, response, {
     parse_mode: 'Markdown',
@@ -564,9 +616,13 @@ async function handleCallback(query) {
     if (data === 'menu_orders') { await handleOrders(chatId, from); return ack(query); }
     if (data === 'menu_sell') { await handleSellMenu(chatId, from); return ack(query); }
     if (data === 'menu_messages') { await handleMessages(chatId, from); return ack(query); }
+    if (data === 'menu_wallet') { await handleWallet(chatId, from); return ack(query); }
     if (data === 'menu_help') { handleHelp(chatId, from); return ack(query); }
     if (data === 'menu_ai') { await handleAI(chatId, from); return ack(query); }
     if (data === 'menu_admin') { await handleAdminPanel(chatId, from); return ack(query); }
+    if (data === 'wallet_topup') { await handleTopUp(chatId, from); return ack(query); }
+    if (data === 'wallet_history') { await handleWalletHistory(chatId, from); return ack(query); }
+    if (data.startsWith('admin_addbal_')) { setState(from.id, { action: 'admin_addbal', targetTgId: parseInt(data.slice(13)) }); bot.sendMessage(chatId, '💰 Enter amount to add to this user\'s wallet:'); return ack(query); }
     if (data === 'admin_broadcast') { await handleBroadcastStart(chatId, from); return ack(query); }
     if (data === 'ai_browse') { await handleShop(chatId, from); return ack(query); }
     if (data === 'ai_request') { setState(from.id, { action: 'ai_request' }); bot.sendMessage(chatId, '📝 *Request a Product*\n\nDescribe what product or service you\'re looking for and we\'ll try to source it for you:', { parse_mode: 'Markdown' }); return ack(query); }
@@ -642,9 +698,25 @@ async function handleCallback(query) {
       return ack(query, '✅ Removed');
     }
 
-    // Checkout
+    // Checkout — wallet balance
+    if (data === 'checkout_wallet') {
+      await handleWalletCheckout(chatId, from);
+      return ack(query);
+    }
     if (data === 'checkout_stripe' || data === 'checkout_crypto') {
       await handleCheckout(chatId, from, data === 'checkout_stripe' ? 'stripe' : 'crypto');
+      return ack(query);
+    }
+
+    // Top-up sent notification
+    if (data.startsWith('topup_sent_')) {
+      const wallet = await getOrCreateWallet(from.id);
+      bot.sendMessage(chatId, `✅ *Payment Noted*\n\nDeposit Ref: \`${wallet.depositAddress}\`\n\n⏳ An admin will verify your deposit and credit your wallet. You'll be notified once your balance is updated.`, {
+        parse_mode: 'Markdown', reply_markup: { inline_keyboard: backButton('menu_wallet') },
+      });
+      notifyAdmins(`💳 *Wallet Top-Up Claim*\n\nUser: @${from.username || from.first_name}\nTelegram ID: \`${from.id}\`\nDeposit Ref: \`${wallet.depositAddress}\`\nCurrent Balance: $${wallet.balance.toFixed(2)}`, [
+        [{ text: '💰 Add Balance', callback_data: `admin_addbal_${from.id}` }],
+      ]);
       return ack(query);
     }
 
@@ -805,6 +877,26 @@ async function handleStatefulMessage(msg, state) {
   const chatId = msg.chat.id;
   const from = msg.from;
   const text = msg.text || '';
+
+  // Admin add balance
+  if (state.action === 'admin_addbal') {
+    clearState(from.id);
+    if (!isAdminUser(from)) return;
+    const amount = parseFloat(text);
+    if (isNaN(amount) || amount <= 0) return bot.sendMessage(chatId, '❌ Invalid amount');
+    const targetWallet = await getOrCreateWallet(state.targetTgId);
+    targetWallet.deposit(amount, `Admin top-up by @${from.username || 'admin'}`);
+    await targetWallet.save();
+    bot.sendMessage(chatId, `✅ Added *$${amount.toFixed(2)}* to user ${state.targetTgId}\nNew balance: *$${targetWallet.balance.toFixed(2)}*`, {
+      parse_mode: 'Markdown', reply_markup: { inline_keyboard: backButton('menu_admin') },
+    });
+    try {
+      bot.sendMessage(state.targetTgId, `💰 *Wallet Credited!*\n\n+$${amount.toFixed(2)} has been added to your wallet.\n💵 New Balance: *$${targetWallet.balance.toFixed(2)}*`, {
+        parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '💰 View Wallet', callback_data: 'menu_wallet' }]] },
+      });
+    } catch {}
+    return;
+  }
 
   // AI Chat
   if (state.action === 'ai_chat') {
@@ -973,7 +1065,74 @@ async function handleStatefulMessage(msg, state) {
   }
 }
 
-// ─── Checkout ───────────────────────────────────────────
+// ─── Wallet Checkout ────────────────────────────────────
+async function handleWalletCheckout(chatId, from) {
+  const user = await User.findOne({ telegramId: from.id }).populate('cart.product');
+  if (!user?.cart?.length) return bot.sendMessage(chatId, '🛒 Cart is empty!');
+
+  const wallet = await getOrCreateWallet(from.id);
+  let total = 0;
+  const items = [];
+
+  for (const c of user.cart) {
+    if (!c.product || c.product.status !== 'active' || c.product.stock === 0) continue;
+    total += c.product.price * c.quantity;
+    items.push({ product: c.product._id, productName: c.product.name, quantity: c.quantity, price: c.product.price });
+  }
+
+  if (!items.length) return bot.sendMessage(chatId, '❌ No valid items in cart');
+
+  if (wallet.balance < total) {
+    return bot.sendMessage(chatId, `⚠️ *Insufficient Balance*\n\n💰 Cart Total: *${formatPrice(total)}*\n💵 Your Balance: *$${wallet.balance.toFixed(2)}*\n📊 You need: *$${(total - wallet.balance).toFixed(2)}* more\n\nTop up your wallet to continue.`, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[{ text: '💳 Top Up Wallet', callback_data: 'wallet_topup' }], ...backButton('menu_cart')] },
+    });
+  }
+
+  const order = await Order.create({
+    orderNumber: generateOrderNumber(),
+    telegramUserId: from.id,
+    telegramUsername: from.username || '',
+    items, totalAmount: total,
+    paymentMethod: 'wallet',
+    status: 'paid',
+  });
+
+  wallet.deduct(total, `Purchase: ${order.orderNumber}`, order._id);
+  await wallet.save();
+
+  const STORE_COMMISSION = parseFloat(process.env.STORE_COMMISSION || '10') / 100;
+
+  for (const item of items) {
+    const product = await Product.findById(item.product);
+    if (product?.sellerTelegramId) {
+      const sellerWallet = await getOrCreateWallet(product.sellerTelegramId);
+      const sellerCut = item.price * item.quantity * (1 - STORE_COMMISSION);
+      const storeCut = item.price * item.quantity * STORE_COMMISSION;
+      sellerWallet.credit(sellerCut, `Sale: ${item.productName}`, order._id);
+      await sellerWallet.save();
+
+      const storeAdminId = getAdminIds()[0];
+      if (storeAdminId) {
+        const storeWallet = await getOrCreateWallet(storeAdminId);
+        storeWallet.credit(storeCut, `Commission: ${item.productName}`, order._id);
+        await storeWallet.save();
+      }
+    }
+  }
+
+  user.cart = [];
+  await user.save();
+
+  await deliverOrder(order);
+
+  bot.sendMessage(chatId, `✅ *Purchase Complete!*\n\n🧾 Order: \`${order.orderNumber}\`\n💰 Paid: *${formatPrice(total)}*\n💵 Remaining Balance: *$${wallet.balance.toFixed(2)}*\n\n📬 Your products are being delivered...`, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: [[{ text: '📦 View Orders', callback_data: 'menu_orders' }], ...backButton()] },
+  });
+}
+
+// ─── Legacy Checkout (Stripe/Crypto) ────────────────────
 async function handleCheckout(chatId, from, method) {
   const user = await User.findOne({ telegramId: from.id }).populate('cart.product');
   if (!user?.cart?.length) return bot.sendMessage(chatId, '🛒 Cart is empty!');

@@ -27,16 +27,16 @@ const productSchema = new mongoose.Schema(
     },
     stock: {
       type: Number,
-      default: -1, // -1 means unlimited
+      default: -1,
     },
     status: {
       type: String,
-      enum: ['active', 'inactive'],
+      enum: ['active', 'inactive', 'pending_review'],
       default: 'active',
     },
     deliveryType: {
       type: String,
-      enum: ['download_link', 'license_key'],
+      enum: ['download_link', 'license_key', 'manual'],
       default: 'download_link',
     },
     deliveryContent: {
@@ -50,12 +50,32 @@ const productSchema = new mongoose.Schema(
         orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
       },
     ],
+    seller: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Seller',
+      default: null,
+    },
+    sellerTelegramId: {
+      type: Number,
+      default: null,
+    },
     totalSold: {
+      type: Number,
+      default: 0,
+    },
+    rating: {
+      type: Number,
+      default: 0,
+    },
+    reviewCount: {
       type: Number,
       default: 0,
     },
   },
   { timestamps: true }
 );
+
+productSchema.index({ status: 1, category: 1 });
+productSchema.index({ seller: 1 });
 
 module.exports = mongoose.model('Product', productSchema);

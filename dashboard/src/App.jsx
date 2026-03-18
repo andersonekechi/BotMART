@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
 import Orders from './pages/Orders';
 import Analytics from './pages/Analytics';
+import Sellers from './pages/Sellers';
 import Settings from './pages/Settings';
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="products" element={<Products />} />
             <Route path="orders" element={<Orders />} />
             <Route path="analytics" element={<Analytics />} />
+            <Route path="sellers" element={<Sellers />} />
             <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -12,6 +12,13 @@ const userStates = new Map();
 
 function getBot() { return bot; }
 
+const STORE_CATEGORIES = [
+  { key: 'bank_log', label: '🏦 Bank Log', emoji: '🏦' },
+  { key: 'digital_goods', label: '💎 Digital Goods', emoji: '💎' },
+  { key: 'bank_opening', label: '🔓 Bank Opening', emoji: '🔓' },
+  { key: 'tools', label: '🛠 Tools', emoji: '🛠' },
+];
+
 // ─── Admin detection ─────────────────────────────────────
 const ADMIN_USERNAMES = ['gs7geup', 'gscf_support', 'thebiggestbag22'];
 
@@ -97,10 +104,11 @@ function mainMenuKeyboard(isAdmin = false) {
   const rows = [
     [{ text: '🛍 Shop', callback_data: 'menu_shop' }, { text: '🛒 Cart', callback_data: 'menu_cart' }],
     [{ text: '📦 My Orders', callback_data: 'menu_orders' }, { text: '💬 Messages', callback_data: 'menu_messages' }],
+    [{ text: '🤖 Ask GSCF AI', callback_data: 'menu_ai' }],
     [{ text: '🏪 Become a Seller', callback_data: 'menu_sell' }, { text: '❓ Help', callback_data: 'menu_help' }],
   ];
   if (isAdmin) {
-    rows.push([{ text: '⚙️ Admin Panel', callback_data: 'menu_admin' }]);
+    rows.push([{ text: '⚙️ Admin Panel', callback_data: 'menu_admin' }, { text: '📢 Broadcast', callback_data: 'admin_broadcast' }]);
   }
   return { inline_keyboard: rows };
 }
@@ -109,11 +117,11 @@ function backButton(target = 'menu_main') {
   return [[{ text: '← Back', callback_data: target }]];
 }
 
-function shopCategoryKeyboard(categories) {
-  const rows = categories.map(cat => [
-    { text: `📂 ${cat.charAt(0).toUpperCase() + cat.slice(1)}`, callback_data: `cat_${cat}` },
+function shopCategoryKeyboard() {
+  const rows = STORE_CATEGORIES.map(cat => [
+    { text: cat.label, callback_data: `cat_${cat.key}` },
   ]);
-  rows.push([{ text: '🔥 View All', callback_data: 'cat_all' }]);
+  rows.push([{ text: '🔥 All Products', callback_data: 'cat_all' }]);
   rows.push([{ text: '🔍 Search', callback_data: 'search_start' }]);
   rows.push(...backButton());
   return { inline_keyboard: rows };
@@ -183,22 +191,18 @@ async function handleMainMenu(chatId, from) {
 // ─── Shop ───────────────────────────────────────────────
 async function handleShop(chatId, from) {
   await getOrCreateUser(from);
-  const products = await Product.find({ status: 'active' });
-  if (products.length === 0) {
-    return bot.sendMessage(chatId, '📭 No products available yet.\nCheck back soon!', {
-      reply_markup: { inline_keyboard: backButton() },
-    });
-  }
+  const activeCount = await Product.countDocuments({ status: 'active', stock: { $ne: 0 } });
 
-  const categories = [...new Set(products.map(p => p.category))];
-  bot.sendMessage(chatId, '🛍 *GSCF Store*\n\nBrowse by category or view all products:', {
+  bot.sendMessage(chatId, `🛍 *GSCF Store*\n\n📦 *${activeCount}* products available\n\nChoose a category:`, {
     parse_mode: 'Markdown',
-    reply_markup: shopCategoryKeyboard(categories),
+    reply_markup: shopCategoryKeyboard(),
   });
 }
 
 async function showProducts(chatId, category, page = 0) {
-  const query = category === 'all' ? { status: 'active' } : { status: 'active', category };
+  const query = category === 'all'
+    ? { status: 'active', stock: { $ne: 0 } }
+    : { status: 'active', category, stock: { $ne: 0 } };
   const perPage = 5;
   const total = await Product.countDocuments(query);
   const products = await Product.find(query).sort({ createdAt: -1 }).skip(page * perPage).limit(perPage);
@@ -384,15 +388,165 @@ async function handleMessages(chatId, from) {
 
 // ─── Help ───────────────────────────────────────────────
 function handleHelp(chatId, from) {
-  let text = `❓ *GSCF Store — Help*\n\n🛍 *Shopping* — Browse products, add to cart, checkout with card or crypto\n📦 *Orders* — Track your purchases and get delivery details\n💬 *Messages* — Chat with sellers about products\n🏪 *Sell* — Apply to become a seller and list your products\n\n_All navigation is through buttons — just tap!_`;
+  let text = `❓ *GSCF Store — Help*\n\n🛍 *Shopping* — Browse products, add to cart, checkout\n📦 *Orders* — Track your purchases\n💬 *Messages* — Chat with sellers\n🤖 *AI Assistant* — Ask questions, find products, make requests\n🏪 *Sell* — Apply to become a seller\n\n_All navigation is through buttons — just tap!_`;
 
   if (isAdminUser(from)) {
-    text += `\n\n⚙️ *Admin*\nUse the Admin Panel button from the main menu to manage the platform.`;
+    text += `\n\n⚙️ *Admin*\nAdmin Panel + Broadcast from the main menu.`;
   }
 
   bot.sendMessage(chatId, text, {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: backButton() },
+  });
+}
+
+// ─── AI Assistant ───────────────────────────────────────
+async function handleAI(chatId, from) {
+  bot.sendMessage(chatId, `🤖 *GSCF AI Assistant*\n\nI can help you with:\n\n🔍 Find products by describing what you need\n💡 Answer questions about our store\n📝 Submit product requests to our team\n📂 Navigate categories and deals\n\nWhat would you like to do?`, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔍 Browse Products', callback_data: 'ai_browse' }],
+        [{ text: '💬 Ask a Question', callback_data: 'ai_ask' }],
+        [{ text: '📝 Request a Product', callback_data: 'ai_request' }],
+        ...backButton(),
+      ],
+    },
+  });
+}
+
+async function handleAIChat(chatId, from, userText) {
+  const query = userText.toLowerCase();
+
+  const products = await Product.find({ status: 'active', stock: { $ne: 0 } });
+  const matched = products.filter(p =>
+    p.name.toLowerCase().includes(query) ||
+    p.description.toLowerCase().includes(query) ||
+    p.category.toLowerCase().includes(query)
+  );
+
+  const catMatch = STORE_CATEGORIES.find(c =>
+    query.includes(c.key.replace('_', ' ')) || query.includes(c.label.toLowerCase().replace(/[^\w\s]/g, '').trim())
+  );
+
+  if (catMatch) {
+    const catProducts = products.filter(p => p.category === catMatch.key);
+    if (catProducts.length > 0) {
+      let text = `🤖 I found *${catProducts.length}* products in *${catMatch.label}*:\n\n`;
+      const btns = [];
+      for (const p of catProducts.slice(0, 5)) {
+        text += `• *${p.name}* — ${formatPrice(p.price)}\n`;
+        btns.push([{ text: `🛒 ${p.name}`, callback_data: `detail_${p._id}` }]);
+      }
+      btns.push([{ text: '📂 View Full Category', callback_data: `cat_${catMatch.key}` }]);
+      btns.push(...backButton('menu_ai'));
+      return bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+    }
+  }
+
+  if (matched.length > 0) {
+    let text = `🤖 I found *${matched.length}* product${matched.length > 1 ? 's' : ''} matching your query:\n\n`;
+    const btns = [];
+    for (const p of matched.slice(0, 5)) {
+      text += `• *${p.name}* — ${formatPrice(p.price)}\n  _${p.description.slice(0, 60)}..._\n\n`;
+      btns.push([{ text: `🛒 ${p.name}`, callback_data: `detail_${p._id}` }]);
+    }
+    if (matched.length > 5) text += `_...and ${matched.length - 5} more. Use Shop to browse all._`;
+    btns.push([{ text: '💬 Ask Another Question', callback_data: 'ai_ask' }]);
+    btns.push(...backButton('menu_ai'));
+    return bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: btns } });
+  }
+
+  const keywords = {
+    price: 'Our products range from affordable to premium. Browse the Shop to see all prices, or tell me a specific product name!',
+    pay: 'We accept *Card payments* (Stripe) and *Crypto* (USDT). Choose your method at checkout!',
+    deliver: 'Products are delivered instantly after payment — you\'ll receive download links or license keys right here in the chat.',
+    refund: 'For refund requests, please message the seller through the Messages section or contact our admin team.',
+    sell: 'Want to sell on GSCF? Tap *Become a Seller* from the main menu to apply!',
+    safe: 'All transactions are secured through GSCF. Buyer-seller communication is proxied through our bot for your protection.',
+    support: 'For support, use the *Messages* feature to contact sellers, or reach our admin team directly.',
+  };
+
+  for (const [key, response] of Object.entries(keywords)) {
+    if (query.includes(key)) {
+      return bot.sendMessage(chatId, `🤖 ${response}`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[{ text: '💬 Ask More', callback_data: 'ai_ask' }], ...backButton('menu_ai')] },
+      });
+    }
+  }
+
+  let response = `🤖 I couldn't find an exact match for "${userText}".\n\nHere's what I can help with:\n\n`;
+  response += `📂 *Our Categories:*\n`;
+  for (const cat of STORE_CATEGORIES) {
+    const count = products.filter(p => p.category === cat.key).length;
+    response += `${cat.emoji} ${cat.label} — ${count} products\n`;
+  }
+  response += `\n📦 *Total Available:* ${products.length} products\n\nWant me to find something specific, or would you like to request a product?`;
+
+  bot.sendMessage(chatId, response, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🛍 Browse Shop', callback_data: 'menu_shop' }],
+        [{ text: '📝 Request This Product', callback_data: 'ai_request' }],
+        [{ text: '💬 Ask Again', callback_data: 'ai_ask' }],
+        ...backButton('menu_ai'),
+      ],
+    },
+  });
+}
+
+async function handleProductRequest(chatId, from, requestText) {
+  clearState(from.id);
+  const user = await getOrCreateUser(from);
+
+  bot.sendMessage(chatId, `✅ *Request Submitted!*\n\nWe've received your request:\n_"${requestText}"_\n\nOur team will review it and may add it to our catalog. You'll be notified if it becomes available!`, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: [[{ text: '🛍 Browse Shop', callback_data: 'menu_shop' }], ...backButton()] },
+  });
+
+  notifyAdmins(`📝 *Product Request*\n\nFrom: @${from.username || from.first_name || 'Anonymous'} (ID: ${from.id})\n\nRequest:\n_"${requestText}"_`, []);
+}
+
+// ─── Broadcast System ───────────────────────────────────
+async function handleBroadcastStart(chatId, from) {
+  if (!isAdminUser(from)) return;
+  setState(from.id, { action: 'broadcast_msg' });
+  bot.sendMessage(chatId, `📢 *Broadcast Message*\n\nType the message you want to send to ALL users.\n\n⚠️ This will be sent to every user who has ever used the bot.\n\n_Supports Markdown formatting._`, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'menu_admin' }]] },
+  });
+}
+
+async function executeBroadcast(chatId, from, messageText) {
+  clearState(from.id);
+  if (!isAdminUser(from)) return;
+
+  const users = await User.find({}, 'telegramId');
+  let sent = 0;
+  let failed = 0;
+
+  bot.sendMessage(chatId, `📢 Broadcasting to ${users.length} users...`);
+
+  const broadcastText = `📢 *GSCF Store*\n\n${messageText}\n\n━━━━━━━━━━━━━━━━\n_Tap below to visit the store:_`;
+
+  for (const user of users) {
+    try {
+      await bot.sendMessage(user.telegramId, broadcastText, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[{ text: '🛍 Open Store', callback_data: 'menu_main' }]] },
+      });
+      sent++;
+      if (sent % 25 === 0) await new Promise(r => setTimeout(r, 1000));
+    } catch {
+      failed++;
+    }
+  }
+
+  bot.sendMessage(chatId, `✅ *Broadcast Complete*\n\n📨 Sent: *${sent}*\n❌ Failed: *${failed}*\n👥 Total: *${users.length}*`, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: backButton('menu_admin') },
   });
 }
 
@@ -411,7 +565,12 @@ async function handleCallback(query) {
     if (data === 'menu_sell') { await handleSellMenu(chatId, from); return ack(query); }
     if (data === 'menu_messages') { await handleMessages(chatId, from); return ack(query); }
     if (data === 'menu_help') { handleHelp(chatId, from); return ack(query); }
+    if (data === 'menu_ai') { await handleAI(chatId, from); return ack(query); }
     if (data === 'menu_admin') { await handleAdminPanel(chatId, from); return ack(query); }
+    if (data === 'admin_broadcast') { await handleBroadcastStart(chatId, from); return ack(query); }
+    if (data === 'ai_browse') { await handleShop(chatId, from); return ack(query); }
+    if (data === 'ai_request') { setState(from.id, { action: 'ai_request' }); bot.sendMessage(chatId, '📝 *Request a Product*\n\nDescribe what product or service you\'re looking for and we\'ll try to source it for you:', { parse_mode: 'Markdown' }); return ack(query); }
+    if (data === 'ai_ask') { setState(from.id, { action: 'ai_chat' }); bot.sendMessage(chatId, '🤖 *GSCF AI Assistant*\n\nAsk me anything about our products, categories, pricing, or how things work:', { parse_mode: 'Markdown' }); return ack(query); }
 
     // Shop / Categories
     if (data.startsWith('cat_')) { await showProducts(chatId, data.slice(4)); return ack(query); }
@@ -646,6 +805,25 @@ async function handleStatefulMessage(msg, state) {
   const chatId = msg.chat.id;
   const from = msg.from;
   const text = msg.text || '';
+
+  // AI Chat
+  if (state.action === 'ai_chat') {
+    clearState(from.id);
+    await handleAIChat(chatId, from, text);
+    return;
+  }
+
+  // Product request
+  if (state.action === 'ai_request') {
+    await handleProductRequest(chatId, from, text);
+    return;
+  }
+
+  // Broadcast
+  if (state.action === 'broadcast_msg') {
+    await executeBroadcast(chatId, from, text);
+    return;
+  }
 
   // Search
   if (state.action === 'search') {
